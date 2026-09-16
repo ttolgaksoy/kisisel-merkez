@@ -50,6 +50,7 @@
       ],
       expenses: [],
       incomes: [],
+      recurringExpenses: [],
       sleepEntries: [],
       routine: [
         { id: id(), title: 'Ekranları bırak', time: '22:45' },
@@ -316,6 +317,17 @@
     return { text: `${percent > 0 ? '↑' : '↓'} %${Math.abs(percent)} geçen aya göre`, tone: favorable ? 'good' : 'warn' };
   }
 
+  function currentMonthKey(date = new Date()) { return `${date.getFullYear()}-${pad(date.getMonth() + 1)}`; }
+
+  function recurringTypeLabel(type) { return ({ fixed: 'Sabit gider', bill: 'Fatura / abonelik', statement: 'Kredi kartı ekstresi' })[type] || 'Düzenli gider'; }
+
+  function recurringDueLabel(item, paid) {
+    if (paid) return 'Ödendi';
+    const today = new Date();
+    const dueDay = clamp(Number(item.dueDay) || 1, 1, 31);
+    return today.getDate() > dueDay ? `Gecikti · ${dueDay}. gün` : `${dueDay}. gün`;
+  }
+
   function renderBudgetPlan() {
     const current = financialMonth();
     const previousDate = new Date(); previousDate.setMonth(previousDate.getMonth() - 1);
@@ -332,6 +344,10 @@
     const netDelta = changeLabel(Math.max(0, current.net), Math.max(0, previous.net));
     const chartMonths = Array.from({ length: 6 }, (_, index) => { const date = new Date(); date.setDate(1); date.setMonth(date.getMonth() - 5 + index); return { date, ...financialMonth(date) }; });
     const chartMax = Math.max(1, ...chartMonths.flatMap(item => [item.income, item.expense]));
+    const monthKey = currentMonthKey();
+    const recurring = [...state.recurringExpenses].sort((a, b) => Number(a.dueDay) - Number(b.dueDay));
+    const recurringTotal = recurring.reduce((sum, item) => sum + Number(item.amount), 0);
+    const recurringPaid = recurring.filter(item => (item.paidMonths || []).includes(monthKey)).reduce((sum, item) => sum + Number(item.amount), 0);
     return `<article class="finance-hero"><div class="row between"><div><div class="stat-label">Toplam birikim</div><div class="finance-balance ${totalSavings < 0 ? 'money-negative' : ''}">${money(totalSavings)}</div><div class="finance-target">Hedef: ${money(target)} · %${target ? Math.round(clamp(totalSavings / target * 100, 0, 100)) : 0} tamamlandı</div></div><button class="button" type="button" data-settings-budget>Ayarla</button></div><div class="progress-track good"><span style="width:${target ? clamp(totalSavings / target * 100, 0, 100) : 0}%"></span></div></article>
       <div class="finance-grid">
         <div class="finance-tile"><div class="stat-label">Bu ay gelir</div><div class="stat-value money-positive">${money(current.income)}</div><div class="delta ${incomeDelta.tone}">${incomeDelta.text}</div></div>
@@ -341,6 +357,8 @@
       <article class="card"><div class="row between"><div><p class="item-title">Gelir / gider gidişatı</p><p class="item-detail">Son 6 ay</p></div><div class="legend"><span>Gelir</span><span>Gider</span></div></div><div class="cashflow-chart">${chartMonths.map(item => `<div class="cashflow-month"><div class="cashflow-bars"><span class="cashflow-bar" style="height:${Math.max(3, item.income / chartMax * 100)}%" title="Gelir ${money(item.income)}"></span><span class="cashflow-bar expense" style="height:${Math.max(3, item.expense / chartMax * 100)}%" title="Gider ${money(item.expense)}"></span></div><span class="cashflow-label">${new Intl.DateTimeFormat('tr-TR', { month: 'short' }).format(item.date)}</span></div>`).join('')}</div></article>
       <article class="card"><div class="row between"><div><p class="item-title">Aylık harcama sınırı</p><p class="item-detail">${money(spent)} / ${money(limit)} · ${money(Math.max(0, limit - spent))} kaldı</p></div><strong>%${limit ? Math.round(spent / limit * 100) : 0}</strong></div><div class="progress-track ${spent > limit ? 'warn' : 'good'}"><span style="width:${clamp(limit ? spent / limit * 100 : 0, 0, 100)}%"></span></div></article>
       <div class="mini-grid"><div class="stat-card"><div class="stat-label">En yüksek gelir</div><div class="stat-value">${esc(bySource[0]?.[0] || '—')}</div><div class="stat-note">${bySource[0] ? money(bySource[0][1]) : 'Kayıt yok'}</div></div><div class="stat-card"><div class="stat-label">En yüksek gider</div><div class="stat-value">${esc(byCategory[0]?.[0] || '—')}</div><div class="stat-note">${byCategory[0] ? money(byCategory[0][1]) : 'Kayıt yok'}</div></div></div>
+      <div class="row between"><div><div class="section-label">Aylık düzenli giderler</div><p class="item-detail">Kira, faturalar, abonelikler ve ekstreler</p></div><button class="button" type="button" data-add="recurring-expense">+ Ekle</button></div>
+      ${recurring.length ? `<article class="card recurring-summary"><div class="row between"><div><p class="item-title">Bu ay ${money(recurringTotal)}</p><p class="item-detail">${money(recurringPaid)} ödendi · ${money(recurringTotal - recurringPaid)} bekliyor</p></div><strong>%${recurringTotal ? Math.round(recurringPaid / recurringTotal * 100) : 0}</strong></div><div class="progress-track good"><span style="width:${recurringTotal ? recurringPaid / recurringTotal * 100 : 0}%"></span></div></article><div class="recurring-list">${recurring.map(item => { const paid = (item.paidMonths || []).includes(monthKey); return `<article class="card"><div class="row"><div class="module-icon">↻</div><div class="grow"><p class="item-title">${esc(item.title)}</p><p class="item-detail">${recurringTypeLabel(item.type)} · ${esc(item.category)} · <span class="${!paid && new Date().getDate() > Number(item.dueDay) ? 'money-negative' : ''}">${recurringDueLabel(item, paid)}</span></p></div><strong>${money(item.amount)}</strong><button class="icon-button" type="button" data-edit-recurring-expense="${item.id}" aria-label="${esc(item.title)} giderini düzenle">···</button></div><button class="button block ${paid ? '' : 'primary'}" type="button" data-toggle-recurring-paid="${item.id}">${paid ? 'Ödemeyi geri al' : 'Ödendi olarak işaretle'}</button></article>`; }).join('')}</div>` : `<article class="card empty-state"><div class="empty-icon">↻</div><h3>Düzenli gider eklenmemiş</h3><p>Kira, fatura, abonelik veya aylık kredi kartı ekstreni ekle.</p><button class="button" type="button" data-add="recurring-expense">Düzenli gider ekle</button></article>`}
       <div class="row between"><div class="section-label">Bu ayın hareketleri</div><div class="row"><button class="button" type="button" data-add="income">+ Gelir</button><button class="button" type="button" data-add="expense">+ Gider</button></div></div>
       ${items.length ? items.map(item => item.transactionType === 'income' ? `<article class="card"><div class="row"><div class="module-icon">＋</div><div class="grow"><p class="item-title">${esc(item.note || item.source)}</p><p class="item-detail">${shortDate(item.date)} · ${esc(item.source)} · ${incomeKindLabel(item.kind)}</p></div><strong class="money-positive">+${money(item.amount)}</strong><button class="icon-button" type="button" data-edit-income="${item.id}">···</button></div></article>` : `<article class="card"><div class="row"><div class="module-icon">₺</div><div class="grow"><p class="item-title">${esc(item.note || item.category)}</p><p class="item-detail">${shortDate(item.date)} · ${esc(item.category)}${item.planned ? ' · Planlı' : ' · Plansız'}</p></div><strong>−${money(item.amount)}</strong><button class="icon-button" type="button" data-edit-expense="${item.id}">···</button></div></article>`).join('') : `<article class="card empty-state"><div class="empty-icon">₺</div><h3>Henüz finans hareketi yok</h3><p>Gelir veya gider eklediğinde pano otomatik hesaplanacak.</p><div class="row" style="justify-content:center"><button class="button" type="button" data-add="income">Gelir ekle</button><button class="button" type="button" data-add="expense">Gider ekle</button></div></article>`}`;
   }
@@ -495,6 +513,36 @@
       $('#item-form', root).addEventListener('submit', event => { event.preventDefault(); const data = new FormData(event.currentTarget); const next = { id: existing?.id || id(), amount: Number(data.get('amount')), date: data.get('date'), kind: data.get('kind'), source: data.get('source').trim(), note: data.get('note').trim() }; if (existing) Object.assign(existing, next); else state.incomes.push(next); save(); closeSheet(); render(); showToast('Gelir kaydedildi'); });
       $('[data-delete-item]', root)?.addEventListener('click', () => { state.incomes = state.incomes.filter(x => x.id !== existing.id); save(); closeSheet(); render(); showToast('Gelir silindi'); });
     });
+  }
+
+  function openRecurringExpenseForm(existing) {
+    const item = existing || { title: '', amount: '', type: 'fixed', category: 'Fatura', dueDay: 1, paidMonths: [] };
+    const categories = ['Kira', 'Fatura', 'Abonelik', 'Kredi kartı', 'Aidat', 'Kredi', 'Sigorta', 'Diğer'];
+    openSheet('Bütçe', existing ? 'Düzenli gideri düzenle' : 'Düzenli gider ekle', `<form class="form" id="recurring-expense-form">
+      <label class="field">Gider adı<input name="title" maxlength="80" required value="${esc(item.title)}" placeholder="Kira, elektrik, kredi kartı ekstresi..."></label>
+      <label class="field">Bu ayki tutar (TL)<input name="amount" type="number" min="0.01" step="0.01" inputmode="decimal" required value="${item.amount}" placeholder="0"></label>
+      <div class="form-row"><label class="field">Tür<select name="type"><option value="fixed" ${item.type === 'fixed' ? 'selected' : ''}>Sabit gider</option><option value="bill" ${item.type === 'bill' ? 'selected' : ''}>Fatura / abonelik</option><option value="statement" ${item.type === 'statement' ? 'selected' : ''}>Kredi kartı ekstresi</option></select></label><label class="field">Kategori<select name="category">${categories.map(x => `<option ${x === item.category ? 'selected' : ''}>${x}</option>`).join('')}</select></label></div>
+      <label class="field">Son ödeme günü<input name="dueDay" type="number" min="1" max="31" required value="${item.dueDay}"></label>
+      <p class="sheet-copy">Ekstre ve fatura tutarı değiştiğinde kalemi düzenleyebilirsin. “Ödendi” dediğinde bu ayın giderlerine otomatik eklenir.</p>${formActions(Boolean(existing))}</form>`, root => {
+      $('#recurring-expense-form', root).addEventListener('submit', event => { event.preventDefault(); const data = new FormData(event.currentTarget); const next = { id: existing?.id || id(), title: data.get('title').trim(), amount: Number(data.get('amount')), type: data.get('type'), category: data.get('category'), dueDay: Number(data.get('dueDay')), paidMonths: existing?.paidMonths || [] }; if (existing) { Object.assign(existing, next); const payment = state.expenses.find(x => x.recurringExpenseId === existing.id && x.recurringMonth === currentMonthKey()); if (payment) { payment.amount = next.amount; payment.category = next.category; payment.note = next.title; } } else state.recurringExpenses.push(next); save(); closeSheet(); render(); showToast('Düzenli gider kaydedildi'); });
+      $('[data-delete-item]', root)?.addEventListener('click', () => { state.recurringExpenses = state.recurringExpenses.filter(x => x.id !== existing.id); save(); closeSheet(); render(); showToast('Düzenli gider silindi'); });
+    });
+  }
+
+  function toggleRecurringPaid(item) {
+    const monthKey = currentMonthKey();
+    item.paidMonths = Array.isArray(item.paidMonths) ? item.paidMonths : [];
+    const paid = item.paidMonths.includes(monthKey);
+    if (paid) {
+      item.paidMonths = item.paidMonths.filter(key => key !== monthKey);
+      state.expenses = state.expenses.filter(expense => !(expense.recurringExpenseId === item.id && expense.recurringMonth === monthKey));
+      showToast('Ödeme geri alındı');
+    } else {
+      item.paidMonths.push(monthKey);
+      if (!state.expenses.some(expense => expense.recurringExpenseId === item.id && expense.recurringMonth === monthKey)) state.expenses.push({ id: id(), amount: Number(item.amount), date: todayISO(), category: item.category, note: item.title, planned: true, recurringExpenseId: item.id, recurringMonth: monthKey });
+      showToast('Bu ay ödendi olarak işaretlendi');
+    }
+    save(); render();
   }
 
   function openSleepForm(existing) {
@@ -772,6 +820,7 @@
       if (button.dataset.add === 'workout') openWorkoutForm(null, date);
       if (button.dataset.add === 'expense') openExpenseForm(null, date);
       if (button.dataset.add === 'income') openIncomeForm(null, date);
+      if (button.dataset.add === 'recurring-expense') openRecurringExpenseForm();
       if (button.dataset.add === 'sleep') openSleepForm();
     }
     if (button.dataset.toggleTask) { const item = state.tasks.find(x => x.id === button.dataset.toggleTask); if (item) { item.done = !item.done; save(); render(); showToast(item.done ? 'Görev tamamlandı' : 'Görev yeniden açıldı'); } }
@@ -781,6 +830,8 @@
     if (button.dataset.editWorkout) openWorkoutForm(state.workouts.find(x => x.id === button.dataset.editWorkout));
     if (button.dataset.editExpense) openExpenseForm(state.expenses.find(x => x.id === button.dataset.editExpense));
     if (button.dataset.editIncome) openIncomeForm(state.incomes.find(x => x.id === button.dataset.editIncome));
+    if (button.dataset.editRecurringExpense) openRecurringExpenseForm(state.recurringExpenses.find(x => x.id === button.dataset.editRecurringExpense));
+    if (button.dataset.toggleRecurringPaid) { const item = state.recurringExpenses.find(x => x.id === button.dataset.toggleRecurringPaid); if (item) toggleRecurringPaid(item); }
     if (button.dataset.editSleep) openSleepForm(state.sleepEntries.find(x => x.id === button.dataset.editSleep));
     if (button.dataset.month) { calendarCursor.setMonth(calendarCursor.getMonth() + Number(button.dataset.month)); selectedCalendarDate = toISO(calendarCursor); renderCalendar(); }
     if (button.dataset.calendarDate) { selectedCalendarDate = button.dataset.calendarDate; renderCalendar(); }
