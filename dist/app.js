@@ -39,7 +39,7 @@
     return {
       version: 1,
       profile: { name: 'Tolga' },
-      settings: { theme: 'auto', monthlyBudget: 20000, startingSavings: 0, savingsTarget: 100000, bedtime: '23:30', wakeTime: '07:00', notifications: false },
+      settings: { theme: 'auto', monthlyBudget: 20000, startingSavings: 0, savingsTarget: 100000, bedtime: '23:30', wakeTime: '07:00', notifications: false, lastBackupAt: '', pinHash: '' },
       tasks: [
         { id: id(), title: 'Bu haftanın 3 önceliğini belirle', date: today, time: '09:00', priority: true, done: false, notes: '' },
         { id: id(), title: 'Kişisel Merkez’i ana ekrana ekle', date: today, time: '20:00', priority: false, done: false, notes: 'Safari’de Paylaş → Ana Ekrana Ekle' }
@@ -51,6 +51,9 @@
       expenses: [],
       incomes: [],
       recurringExpenses: [],
+      recurringTasks: [],
+      inboxNotes: [],
+      goals: [],
       sleepEntries: [],
       routine: [
         { id: id(), title: 'Ekranları bırak', time: '22:45' },
@@ -66,9 +69,22 @@
   function loadState() {
     try {
       const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-      if (saved && saved.version === 1) return { ...defaultState(), ...saved, settings: { ...defaultState().settings, ...saved.settings } };
+      if (saved && saved.version === 1) return normalizeState(saved);
     } catch (error) { console.warn('Kayıt okunamadı', error); }
     return defaultState();
+  }
+
+  function normalizeState(saved) {
+    const defaults = defaultState();
+    return {
+      ...defaults,
+      ...saved,
+      settings: { ...defaults.settings, ...(saved.settings || {}) },
+      recurringExpenses: Array.isArray(saved.recurringExpenses) ? saved.recurringExpenses : [],
+      recurringTasks: Array.isArray(saved.recurringTasks) ? saved.recurringTasks : [],
+      inboxNotes: Array.isArray(saved.inboxNotes) ? saved.inboxNotes : [],
+      goals: Array.isArray(saved.goals) ? saved.goals : []
+    };
   }
 
   let state = loadState();
@@ -95,6 +111,32 @@
   }
 
   migrateWorkoutDetails();
+
+  function recurringTaskMatches(rule, date) {
+    if (toISO(date) < (rule.startDate || todayISO())) return false;
+    if (rule.schedule === 'daily') return true;
+    if (String(rule.schedule).startsWith('weekly-')) return date.getDay() === Number(String(rule.schedule).split('-')[1]);
+    return rule.schedule === 'monthly' && date.getDate() === clamp(Number(rule.monthDay) || 1, 1, 31);
+  }
+
+  function syncRecurringTasks() {
+    let changed = false;
+    const start = new Date(); start.setHours(12, 0, 0, 0);
+    state.recurringTasks.forEach(rule => {
+      for (let offset = 0; offset < 15; offset++) {
+        const date = new Date(start); date.setDate(date.getDate() + offset);
+        if (!recurringTaskMatches(rule, date)) continue;
+        const iso = toISO(date);
+        if ((rule.skippedDates || []).includes(iso)) continue;
+        if (state.tasks.some(task => task.recurringRuleId === rule.id && task.date === iso)) continue;
+        state.tasks.push({ id: id(), title: rule.title, date: iso, time: rule.time || '', priority: Boolean(rule.priority), done: false, notes: 'Tekrarlayan görev', recurringRuleId: rule.id });
+        changed = true;
+      }
+    });
+    if (changed) save();
+  }
+
+  syncRecurringTasks();
 
   function showToast(message) {
     clearTimeout(toastTimer);
@@ -158,6 +200,35 @@
     };
   }
 
+  function backupIsDue() {
+    if (!state.settings.lastBackupAt) return true;
+    const last = new Date(state.settings.lastBackupAt);
+    return Number.isNaN(last.getTime()) || (Date.now() - last.getTime()) > 30 * 86400000;
+  }
+
+  function upcomingPayments(days = 7) {
+    const start = new Date(); start.setHours(0, 0, 0, 0);
+    const end = new Date(start); end.setDate(end.getDate() + days);
+    const candidates = [];
+    [0, 1].forEach(monthOffset => {
+      const month = new Date(start.getFullYear(), start.getMonth() + monthOffset, 1);
+      const monthKey = currentMonthKey(month);
+      const lastDay = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
+      state.recurringExpenses.forEach(item => {
+        if ((item.paidMonths || []).includes(monthKey)) return;
+        const due = new Date(month.getFullYear(), month.getMonth(), Math.min(lastDay, clamp(Number(item.dueDay) || 1, 1, 31)));
+        if ((monthOffset === 0 && due < start) || (due >= start && due <= end)) candidates.push({ item, due });
+      });
+    });
+    return candidates.sort((a, b) => a.due - b.due);
+  }
+
+  function renderInboxNotes() {
+    const notes = [...state.inboxNotes].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 5);
+    if (!notes.length) return '';
+    return `<div class="row between"><div class="section-label">Hızlı notlar</div><button class="button" type="button" data-add="inbox">+ Not</button></div><div class="inbox-list">${notes.map(note => `<article class="card"><div class="row"><div class="module-icon">•</div><div class="grow"><p class="item-title">${esc(note.text)}</p><p class="item-detail">${new Intl.DateTimeFormat('tr-TR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(note.createdAt))}</p></div></div><div class="action-grid"><button class="button" type="button" data-inbox-to-task="${note.id}">Göreve çevir</button><button class="button danger" type="button" data-delete-inbox="${note.id}">Sil</button></div></article>`).join('')}</div>`;
+  }
+
   function renderToday() {
     const items = todayItems();
     const priorities = items.tasks.filter(item => item.priority).slice(0, 3);
@@ -166,6 +237,7 @@
     const todaySpend = items.expenses.reduce((sum, item) => sum + Number(item.amount), 0);
     const dailyLimit = Number(state.settings.monthlyBudget || 0) / 30;
     const routineDone = state.routineLogs[todayISO()] || [];
+    const payments = upcomingPayments();
     setHeader(new Intl.DateTimeFormat('tr-TR', { day: 'numeric', month: 'long', weekday: 'long' }).format(new Date()), `${greeting()}, ${state.profile.name}`);
 
     view.innerHTML = `<div class="stack">
@@ -178,6 +250,10 @@
           <button class="button" type="button" data-edit-task="${focus.id}">Düzenle</button>
         </div>
       </article>` : `<article class="focus-card"><div class="focus-top"><span>GÜNÜN ODAĞI</span><span>0 / 3</span></div><div class="focus-title">Bugünün odağını seç</div><div class="focus-note">En fazla üç önemli iş ekle.</div><div class="focus-actions"><button class="button" type="button" data-add="task">Öncelik ekle</button></div></article>`}
+
+      <div class="quick-actions"><button class="button" type="button" data-add="inbox">• Hızlı not</button><button class="button" type="button" data-open-week-planner>◫ Haftayı planla</button></div>
+      ${backupIsDue() ? `<article class="card reminder-card"><div class="row"><div class="module-icon">⇩</div><div class="grow"><p class="item-title">Yedek zamanı</p><p class="item-detail">Kayıtlarını aylık olarak indirip iCloud Drive veya Google Drive'a koy.</p></div><button class="button" type="button" data-export>Yedekle</button></div></article>` : ''}
+      ${renderInboxNotes()}
 
       <div class="section-label">Bugünün planı</div>
       ${items.tasks.length ? items.tasks.map(taskCard).join('') : emptyInline('✓', 'Bugün görev yok', 'Hızlıca bir öncelik ekleyebilirsin.', 'Görev ekle', 'task')}
@@ -199,6 +275,7 @@
         </div>
         <div class="progress-track ${todaySpend > dailyLimit ? 'warn' : 'good'}"><span style="width:${clamp(dailyLimit ? todaySpend / dailyLimit * 100 : 0, 0, 100)}%"></span></div>
       </article>
+      ${payments.length ? `<article class="card"><div class="row between"><div><p class="item-title">Yaklaşan ödemeler</p><p class="item-detail">7 gün içindeki ve geciken ${payments.length} kalem</p></div><button class="button" type="button" data-open-budget>Gör</button></div><div class="compact-list">${payments.slice(0, 4).map(({ item, due }) => `<div class="compact-row"><span class="grow">${esc(item.title)}<small>${due < new Date().setHours(0,0,0,0) ? 'Gecikti' : shortDate(toISO(due))}</small></span><strong>${money(item.amount)}</strong></div>`).join('')}</div></article>` : ''}
     </div>`;
   }
 
@@ -277,8 +354,19 @@
 
   function renderTaskPlan() {
     const items = [...state.tasks].sort((a, b) => `${a.done}${a.date}${a.time}`.localeCompare(`${b.done}${b.date}${b.time}`));
-    return `<div class="row between"><div class="section-label">Görevler ve hedefler</div><button class="button" type="button" data-add="task">+ Görev</button></div>
-      ${items.length ? items.map(item => `<article class="card ${item.done ? 'is-done' : ''}"><div class="row"><button class="check-button ${item.done ? 'done' : ''}" type="button" data-toggle-task="${item.id}">✓</button><div class="grow"><p class="item-title">${esc(item.title)}</p><p class="item-detail">${shortDate(item.date)} · ${esc(item.time || 'Saat yok')}${item.priority ? ' · Öncelik' : ''}</p></div><button class="icon-button" type="button" data-edit-task="${item.id}">···</button></div></article>`).join('') : emptyInline('✓', 'Görev listesi boş', 'İlk hedefini ya da yapman gereken işi ekle.', 'Görev ekle', 'task')}`;
+    const rules = [...state.recurringTasks].sort((a, b) => a.title.localeCompare(b.title, 'tr'));
+    return `<div class="row between"><div class="section-label">Görevler</div><div class="row"><button class="button" type="button" data-open-week-planner>Haftayı planla</button><button class="button" type="button" data-add="task">+ Görev</button></div></div>
+      <div class="row between"><div><div class="section-label">Tekrarlayan görevler</div><p class="item-detail">Rutin işler takvime otomatik eklenir</p></div><button class="button" type="button" data-add="recurring-task">+ Ekle</button></div>
+      ${rules.length ? rules.map(rule => `<article class="card"><div class="row"><div class="module-icon">↻</div><div class="grow"><p class="item-title">${esc(rule.title)}</p><p class="item-detail">${recurringScheduleLabel(rule)} · ${esc(rule.time || 'Saat yok')}${rule.priority ? ' · Öncelik' : ''}</p></div><button class="icon-button" type="button" data-edit-recurring-task="${rule.id}">···</button></div></article>`).join('') : `<article class="card empty-state"><div class="empty-icon">↻</div><h3>Tekrarlayan görev yok</h3><p>Haftalık planlama veya düzenli kontrolleri bir kez kur.</p><button class="button" type="button" data-add="recurring-task">Tekrarlayan görev ekle</button></article>`}
+      <div class="section-label">Tarihli görevler</div>
+      ${items.length ? items.map(item => `<article class="card ${item.done ? 'is-done' : ''}"><div class="row"><button class="check-button ${item.done ? 'done' : ''}" type="button" data-toggle-task="${item.id}">✓</button><div class="grow"><p class="item-title">${esc(item.title)}</p><p class="item-detail">${shortDate(item.date)} · ${esc(item.time || 'Saat yok')}${item.priority ? ' · Öncelik' : ''}${item.recurringRuleId ? ' · Tekrarlayan' : ''}</p></div><button class="icon-button" type="button" data-edit-task="${item.id}">···</button></div></article>`).join('') : emptyInline('✓', 'Görev listesi boş', 'İlk hedefini ya da yapman gereken işi ekle.', 'Görev ekle', 'task')}`;
+  }
+
+  function recurringScheduleLabel(rule) {
+    const weekly = { 0: 'Her pazar', 1: 'Her pazartesi', 2: 'Her salı', 3: 'Her çarşamba', 4: 'Her perşembe', 5: 'Her cuma', 6: 'Her cumartesi' };
+    if (rule.schedule === 'daily') return 'Her gün';
+    if (rule.schedule === 'monthly') return `Her ayın ${rule.monthDay || 1}. günü`;
+    return weekly[Number(String(rule.schedule).split('-')[1])] || 'Her hafta';
   }
 
   function renderWorkoutPlan() {
@@ -348,6 +436,8 @@
     const recurring = [...state.recurringExpenses].sort((a, b) => Number(a.dueDay) - Number(b.dueDay));
     const recurringTotal = recurring.reduce((sum, item) => sum + Number(item.amount), 0);
     const recurringPaid = recurring.filter(item => (item.paidMonths || []).includes(monthKey)).reduce((sum, item) => sum + Number(item.amount), 0);
+    const unpaidCommitments = Math.max(0, recurringTotal - recurringPaid);
+    const forecastNet = current.income - current.expense - unpaidCommitments;
     return `<article class="finance-hero"><div class="row between"><div><div class="stat-label">Toplam birikim</div><div class="finance-balance ${totalSavings < 0 ? 'money-negative' : ''}">${money(totalSavings)}</div><div class="finance-target">Hedef: ${money(target)} · %${target ? Math.round(clamp(totalSavings / target * 100, 0, 100)) : 0} tamamlandı</div></div><button class="button" type="button" data-settings-budget>Ayarla</button></div><div class="progress-track good"><span style="width:${target ? clamp(totalSavings / target * 100, 0, 100) : 0}%"></span></div></article>
       <div class="finance-grid">
         <div class="finance-tile"><div class="stat-label">Bu ay gelir</div><div class="stat-value money-positive">${money(current.income)}</div><div class="delta ${incomeDelta.tone}">${incomeDelta.text}</div></div>
@@ -356,6 +446,7 @@
       </div>
       <article class="card"><div class="row between"><div><p class="item-title">Gelir / gider gidişatı</p><p class="item-detail">Son 6 ay</p></div><div class="legend"><span>Gelir</span><span>Gider</span></div></div><div class="cashflow-chart">${chartMonths.map(item => `<div class="cashflow-month"><div class="cashflow-bars"><span class="cashflow-bar" style="height:${Math.max(3, item.income / chartMax * 100)}%" title="Gelir ${money(item.income)}"></span><span class="cashflow-bar expense" style="height:${Math.max(3, item.expense / chartMax * 100)}%" title="Gider ${money(item.expense)}"></span></div><span class="cashflow-label">${new Intl.DateTimeFormat('tr-TR', { month: 'short' }).format(item.date)}</span></div>`).join('')}</div></article>
       <article class="card"><div class="row between"><div><p class="item-title">Aylık harcama sınırı</p><p class="item-detail">${money(spent)} / ${money(limit)} · ${money(Math.max(0, limit - spent))} kaldı</p></div><strong>%${limit ? Math.round(spent / limit * 100) : 0}</strong></div><div class="progress-track ${spent > limit ? 'warn' : 'good'}"><span style="width:${clamp(limit ? spent / limit * 100 : 0, 0, 100)}%"></span></div></article>
+      <article class="card forecast-card"><div class="row between"><div><p class="item-title">Ay sonu tahmini</p><p class="item-detail">Kayıtlı gelirden ödenen ve bekleyen düzenli giderler düşüldü.</p></div><strong class="${forecastNet >= 0 ? 'money-positive' : 'money-negative'}">${money(forecastNet)}</strong></div><div class="compact-list"><div class="compact-row"><span>Bekleyen düzenli gider</span><strong>${money(unpaidCommitments)}</strong></div><div class="compact-row"><span>Mevcut net</span><strong>${money(current.net)}</strong></div></div></article>
       <div class="mini-grid"><div class="stat-card"><div class="stat-label">En yüksek gelir</div><div class="stat-value">${esc(bySource[0]?.[0] || '—')}</div><div class="stat-note">${bySource[0] ? money(bySource[0][1]) : 'Kayıt yok'}</div></div><div class="stat-card"><div class="stat-label">En yüksek gider</div><div class="stat-value">${esc(byCategory[0]?.[0] || '—')}</div><div class="stat-note">${byCategory[0] ? money(byCategory[0][1]) : 'Kayıt yok'}</div></div></div>
       <div class="row between"><div><div class="section-label">Aylık düzenli giderler</div><p class="item-detail">Kira, faturalar, abonelikler ve ekstreler</p></div><button class="button" type="button" data-add="recurring-expense">+ Ekle</button></div>
       ${recurring.length ? `<article class="card recurring-summary"><div class="row between"><div><p class="item-title">Bu ay ${money(recurringTotal)}</p><p class="item-detail">${money(recurringPaid)} ödendi · ${money(recurringTotal - recurringPaid)} bekliyor</p></div><strong>%${recurringTotal ? Math.round(recurringPaid / recurringTotal * 100) : 0}</strong></div><div class="progress-track good"><span style="width:${recurringTotal ? recurringPaid / recurringTotal * 100 : 0}%"></span></div></article><div class="recurring-list">${recurring.map(item => { const paid = (item.paidMonths || []).includes(monthKey); return `<article class="card"><div class="row"><div class="module-icon">↻</div><div class="grow"><p class="item-title">${esc(item.title)}</p><p class="item-detail">${recurringTypeLabel(item.type)} · ${esc(item.category)} · <span class="${!paid && new Date().getDate() > Number(item.dueDay) ? 'money-negative' : ''}">${recurringDueLabel(item, paid)}</span></p></div><strong>${money(item.amount)}</strong><button class="icon-button" type="button" data-edit-recurring-expense="${item.id}" aria-label="${esc(item.title)} giderini düzenle">···</button></div><button class="button block ${paid ? '' : 'primary'}" type="button" data-toggle-recurring-paid="${item.id}">${paid ? 'Ödemeyi geri al' : 'Ödendi olarak işaretle'}</button></article>`; }).join('')}</div>` : `<article class="card empty-state"><div class="empty-icon">↻</div><h3>Düzenli gider eklenmemiş</h3><p>Kira, fatura, abonelik veya aylık kredi kartı ekstreni ekle.</p><button class="button" type="button" data-add="recurring-expense">Düzenli gider ekle</button></article>`}
@@ -444,21 +535,53 @@
       <article class="card"><div class="row between"><div><p class="item-title">Dört haftalık gidişat</p><p class="item-detail">Tamamlanan görev oranı</p></div><span class="muted">↗</span></div><div class="bar-chart">${weeks.map((week, index) => `<div class="bar-column"><span class="bar-value">%${week.taskRate}</span><span class="bar" style="height:${Math.max(5, week.taskRate / maxRate * 100)}%"></span><span class="bar-label">${index === 3 ? 'Bu hafta' : `${4 - index} hf.`}</span></div>`).join('')}</div></article>
       <article class="card"><p class="item-title">Haftanın değerlendirmesi</p><p class="item-detail">Görev, spor, uyku ve bütçe kayıtlarından anında hazırlanır.</p><div class="action-grid"><button class="button primary" type="button" data-open-evaluation>Değerlendirmeyi aç</button><button class="button" type="button" data-open-week-review>Haftayı değerlendir</button></div></article>
       <article class="card"><p class="item-title">Bütçe değerlendirmesi</p><p class="item-detail">Harcama hızını, kategorileri ve plansız giderleri yorumlar.</p><button class="button block" style="margin-top:12px" type="button" data-open-budget-evaluation>Bütçeyi değerlendir</button></article>
+      <div class="row between"><div class="section-label">Hedeflerim</div><button class="button" type="button" data-add="goal">+ Hedef</button></div>
+      ${state.goals.length ? state.goals.map(goal => { const percent = clamp(Number(goal.target) ? Number(goal.current) / Number(goal.target) * 100 : 0, 0, 100); return `<article class="card"><div class="row between"><div><p class="item-title">${esc(goal.title)}</p><p class="item-detail">${esc(String(goal.current))} / ${esc(String(goal.target))} ${esc(goal.unit || '')}</p></div><button class="icon-button" type="button" data-edit-goal="${goal.id}">···</button></div><div class="row between goal-progress"><div class="progress-track good grow"><span style="width:${percent}%"></span></div><strong>%${Math.round(percent)}</strong></div></article>`; }).join('') : `<article class="card empty-state"><div class="empty-icon">◎</div><h3>Hedef eklenmemiş</h3><p>Birikim, spor veya kişisel bir hedefi sayısal olarak takip et.</p><button class="button" type="button" data-add="goal">Hedef ekle</button></article>`}
       ${state.weeklyReviews.length ? `<div class="section-label">Kayıtlı değerlendirmeler</div>${[...state.weeklyReviews].sort((a,b)=>b.weekStart.localeCompare(a.weekStart)).slice(0,3).map(r => `<article class="card"><p class="item-title">${shortDate(r.weekStart)} haftası</p><p class="item-detail"><strong>İyi:</strong> ${esc(r.good || '—')}<br><strong>Zorluk:</strong> ${esc(r.hard || '—')}<br><strong>Odak:</strong> ${esc(r.focus || '—')}</p></article>`).join('')}` : ''}
     </div>`;
   }
 
   function formActions(editing) { return `<div class="form-actions">${editing ? '<button class="button danger" type="button" data-delete-item>Sil</button>' : ''}<button class="button primary" type="submit">Kaydet</button></div>`; }
 
-  function openTaskForm(existing, presetDate) {
-    const item = existing || { title: '', date: presetDate || todayISO(), time: '09:00', priority: false, notes: '' };
+  function openTaskForm(existing, presetDate, presetTitle = '', inboxId = '') {
+    const item = existing || { title: presetTitle, date: presetDate || todayISO(), time: '09:00', priority: false, notes: '' };
     openSheet('Plan', existing ? 'Görevi düzenle' : 'Görev ekle', `<form class="form" id="item-form">
       <label class="field">Görev<input name="title" maxlength="100" required value="${esc(item.title)}" placeholder="Ne yapacaksın?"></label>
       <div class="form-row"><label class="field">Tarih<input name="date" type="date" required value="${item.date}"></label><label class="field">Saat<input name="time" type="time" value="${item.time || ''}"></label></div>
       <label class="checkbox-field"><input name="priority" type="checkbox" ${item.priority ? 'checked' : ''}> Bugünün önceliklerine ekle</label>
       <label class="field">Kısa not<input name="notes" maxlength="140" value="${esc(item.notes || '')}" placeholder="İstersen boş bırak"></label>${formActions(Boolean(existing))}</form>`, root => {
-      $('#item-form', root).addEventListener('submit', event => { event.preventDefault(); const data = new FormData(event.currentTarget); const next = { id: existing?.id || id(), title: data.get('title').trim(), date: data.get('date'), time: data.get('time'), priority: data.get('priority') === 'on', notes: data.get('notes').trim(), done: existing?.done || false }; if (existing) Object.assign(existing, next); else state.tasks.push(next); save(); closeSheet(); render(); showToast('Görev kaydedildi'); });
-      $('[data-delete-item]', root)?.addEventListener('click', () => { state.tasks = state.tasks.filter(x => x.id !== existing.id); save(); closeSheet(); render(); showToast('Görev silindi'); });
+      $('#item-form', root).addEventListener('submit', event => { event.preventDefault(); const data = new FormData(event.currentTarget); const next = { id: existing?.id || id(), title: data.get('title').trim(), date: data.get('date'), time: data.get('time'), priority: data.get('priority') === 'on', notes: data.get('notes').trim(), done: existing?.done || false, recurringRuleId: existing?.recurringRuleId }; if (existing) Object.assign(existing, next); else state.tasks.push(next); if (inboxId) state.inboxNotes = state.inboxNotes.filter(note => note.id !== inboxId); save(); closeSheet(); render(); showToast('Görev kaydedildi'); });
+      $('[data-delete-item]', root)?.addEventListener('click', () => { if (existing.recurringRuleId) { const rule = state.recurringTasks.find(x => x.id === existing.recurringRuleId); if (rule) rule.skippedDates = [...new Set([...(rule.skippedDates || []), existing.date])]; } state.tasks = state.tasks.filter(x => x.id !== existing.id); save(); closeSheet(); render(); showToast('Görev silindi'); });
+    });
+  }
+
+  function openRecurringTaskForm(existing) {
+    const item = existing || { title: '', schedule: 'weekly-1', monthDay: 1, startDate: todayISO(), time: '09:00', priority: false };
+    const schedules = [['daily','Her gün'],['weekly-1','Her pazartesi'],['weekly-2','Her salı'],['weekly-3','Her çarşamba'],['weekly-4','Her perşembe'],['weekly-5','Her cuma'],['weekly-6','Her cumartesi'],['weekly-0','Her pazar'],['monthly','Her ay']];
+    openSheet('Plan', existing ? 'Tekrarlayan görevi düzenle' : 'Tekrarlayan görev ekle', `<form class="form" id="recurring-task-form"><label class="field">Görev<input name="title" maxlength="100" required value="${esc(item.title)}" placeholder="Haftayı planla, faturaları kontrol et..."></label><div class="form-row"><label class="field">Tekrar<select name="schedule">${schedules.map(([value,label]) => `<option value="${value}" ${item.schedule === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label class="field">Aylıksa ayın günü<input name="monthDay" type="number" min="1" max="31" value="${item.monthDay || 1}"></label></div><div class="form-row"><label class="field">Başlangıç<input name="startDate" type="date" required value="${item.startDate || todayISO()}"></label><label class="field">Saat<input name="time" type="time" value="${item.time || ''}"></label></div><label class="checkbox-field"><input name="priority" type="checkbox" ${item.priority ? 'checked' : ''}> Oluşan görevleri öncelik yap</label>${formActions(Boolean(existing))}</form>`, root => {
+      $('#recurring-task-form', root).addEventListener('submit', event => { event.preventDefault(); const data = new FormData(event.currentTarget); const next = { id: existing?.id || id(), title: data.get('title').trim(), schedule: data.get('schedule'), monthDay: Number(data.get('monthDay')), startDate: data.get('startDate'), time: data.get('time'), priority: data.get('priority') === 'on', skippedDates: existing?.skippedDates || [] }; if (existing) { Object.assign(existing, next); state.tasks = state.tasks.filter(task => !(task.recurringRuleId === existing.id && !task.done && task.date >= todayISO())); } else state.recurringTasks.push(next); syncRecurringTasks(); save(); closeSheet(); render(); showToast('Tekrarlayan görev kaydedildi'); });
+      $('[data-delete-item]', root)?.addEventListener('click', () => { state.recurringTasks = state.recurringTasks.filter(rule => rule.id !== existing.id); state.tasks = state.tasks.filter(task => !(task.recurringRuleId === existing.id && !task.done && task.date >= todayISO())); save(); closeSheet(); render(); showToast('Tekrarlayan görev silindi'); });
+    });
+  }
+
+  function openInboxForm() {
+    openSheet('Hızlı yakala', 'Aklındakini yaz', `<form class="form" id="inbox-form"><label class="field">Not<textarea name="text" maxlength="300" required placeholder="Sonra düzenlersin; şimdi kısaca yaz."></textarea></label><button class="button primary block" type="submit">Nota ekle</button></form>`, root => {
+      $('#inbox-form', root).addEventListener('submit', event => { event.preventDefault(); const text = new FormData(event.currentTarget).get('text').trim(); state.inboxNotes.push({ id: id(), text, createdAt: new Date().toISOString() }); save(); closeSheet(); render(); showToast('Hızlı not eklendi'); });
+    });
+  }
+
+  function openWeekPlanner() {
+    const monday = startOfWeek(); monday.setDate(monday.getDate() + 7);
+    openSheet('3 dakikalık plan', 'Gelecek haftayı kur', `<form class="form" id="week-planner-form"><label class="field">Haftanın başlangıcı<input name="startDate" type="date" required value="${toISO(monday)}"></label><label class="field">Üç öncelik <span class="small">Her satıra bir tane</span><textarea name="priorities" maxlength="300" placeholder="En önemli iş&#10;İkinci öncelik&#10;Üçüncü öncelik"></textarea></label><fieldset class="choice-field"><legend>Spor günleri</legend><div class="choice-grid">${['Pzt','Sal','Çar','Per','Cum','Cmt','Paz'].map((day,index) => `<label><input type="checkbox" name="workoutDay" value="${index}"><span>${day}</span></label>`).join('')}</div></fieldset><div class="form-row"><label class="field">Yatış hedefi<input name="bedtime" type="time" required value="${state.settings.bedtime}"></label><label class="field">Kalkış hedefi<input name="wakeTime" type="time" required value="${state.settings.wakeTime}"></label></div><p class="sheet-copy">Kayıtlı düzenli ödemelerin yaklaşınca ana ekranda otomatik görünür.</p><button class="button primary block" type="submit">Haftayı oluştur</button></form>`, root => {
+      $('#week-planner-form', root).addEventListener('submit', event => { event.preventDefault(); const data = new FormData(event.currentTarget); const startDate = data.get('startDate'); const priorities = data.get('priorities').split(/\r?\n/).map(x => x.trim()).filter(Boolean).slice(0, 3); priorities.forEach((title,index) => state.tasks.push({ id: id(), title, date: addDays(startDate, index * 2), time: '09:00', priority: true, done: false, notes: 'Haftalık plan' })); data.getAll('workoutDay').forEach(day => { const date = addDays(startDate, Number(day)); if (!state.workouts.some(x => x.date === date)) state.workouts.push({ id: id(), title: 'Antrenman', date, time: '18:30', duration: 45, exercises: '', exerciseItems: [], done: false }); }); state.settings.bedtime = data.get('bedtime'); state.settings.wakeTime = data.get('wakeTime'); save(); closeSheet(); render(); showToast('Gelecek hafta hazır'); });
+    });
+  }
+
+  function openGoalForm(existing) {
+    const item = existing || { title: '', current: 0, target: 1, unit: '' };
+    openSheet('Hedef', existing ? 'Hedefi güncelle' : 'Hedef ekle', `<form class="form" id="goal-form"><label class="field">Hedef adı<input name="title" maxlength="80" required value="${esc(item.title)}" placeholder="100.000 TL birikim, 12 antrenman..."></label><div class="form-row"><label class="field">Mevcut<input name="current" type="number" step="0.01" required value="${item.current}"></label><label class="field">Hedef<input name="target" type="number" min="0.01" step="0.01" required value="${item.target}"></label></div><label class="field">Birim<input name="unit" maxlength="20" value="${esc(item.unit || '')}" placeholder="TL, antrenman, saat..."></label>${formActions(Boolean(existing))}</form>`, root => {
+      $('#goal-form', root).addEventListener('submit', event => { event.preventDefault(); const data = new FormData(event.currentTarget); const next = { id: existing?.id || id(), title: data.get('title').trim(), current: Number(data.get('current')), target: Number(data.get('target')), unit: data.get('unit').trim() }; if (existing) Object.assign(existing, next); else state.goals.push(next); save(); closeSheet(); render(); showToast('Hedef kaydedildi'); });
+      $('[data-delete-item]', root)?.addEventListener('click', () => { state.goals = state.goals.filter(goal => goal.id !== existing.id); save(); closeSheet(); render(); showToast('Hedef silindi'); });
     });
   }
 
@@ -616,14 +739,40 @@
     openSheet('Kişisel Merkez', 'Ayarlar ve yedek', `<div class="settings-list">
       <form class="settings-block form" id="profile-form"><label class="field">Adın<input name="name" maxlength="40" required value="${esc(state.profile.name)}"></label><label class="field">Görünüm<select name="theme"><option value="auto" ${state.settings.theme === 'auto' ? 'selected' : ''}>Telefon ayarını kullan</option><option value="light" ${state.settings.theme === 'light' ? 'selected' : ''}>Açık</option><option value="dark" ${state.settings.theme === 'dark' ? 'selected' : ''}>Koyu</option></select></label><button class="button primary" type="submit">Ayarları kaydet</button></form>
       <div class="settings-block"><h3>Hatırlatmalar</h3><p>Görev ve spor saatlerinde bu cihazda bildirim gösterebilir. İlk sürümde kontrol uygulama açıkken yapılır.</p><button class="button" type="button" data-enable-notifications>${state.settings.notifications ? 'Bildirimler açık' : 'Bildirimleri aç'}</button></div>
-      <div class="settings-block"><h3>Yedekleme</h3><p>Kayıtların bu cihazda saklanır. Yedeği dosya olarak indirip Google Drive veya iCloud Drive’a koyabilirsin.</p><div class="settings-actions"><button class="button" type="button" data-export>Yedeği indir</button><button class="button" type="button" data-import>Yedekten yükle</button></div></div>
+      <div class="settings-block"><h3>Uygulama kilidi</h3><p>Bütçe ve planlarını meraklı gözlerden korumak için 4–6 haneli bir PIN kullan.</p><div class="settings-actions"><button class="button" type="button" data-pin-settings>${state.settings.pinHash ? 'PIN’i değiştir' : 'PIN belirle'}</button>${state.settings.pinHash ? '<button class="button" type="button" data-lock-now>Şimdi kilitle</button>' : ''}</div></div>
+      <div class="settings-block"><h3>Yedekleme</h3><p>Kayıtların bu cihazda saklanır. ${state.settings.lastBackupAt ? `Son yedek: ${shortDate(state.settings.lastBackupAt.slice(0,10))}.` : 'Henüz yedek alınmadı.'}</p><div class="settings-actions"><button class="button" type="button" data-export>Yedeği indir</button><button class="button" type="button" data-import>Yedekten yükle</button></div></div>
       <div class="settings-block"><h3>iPhone’a kur</h3><p>Siteyi Safari’de aç. Paylaş simgesine dokunup “Ana Ekrana Ekle”yi seç.</p></div>
     </div>`, root => {
       $('#profile-form', root).addEventListener('submit', event => { event.preventDefault(); const data = new FormData(event.currentTarget); state.profile.name = data.get('name').trim(); state.settings.theme = data.get('theme'); save(); applyTheme(); closeSheet(); render(); showToast('Ayarlar kaydedildi'); });
       $('[data-enable-notifications]', root).addEventListener('click', enableNotifications);
+      $('[data-pin-settings]', root).addEventListener('click', openPinSettings);
+      $('[data-lock-now]', root)?.addEventListener('click', () => { closeSheet(); showPinLock(); });
       $('[data-export]', root).addEventListener('click', exportBackup);
       $('[data-import]', root).addEventListener('click', () => $('#backup-file').click());
     });
+  }
+
+  async function hashPin(pin) {
+    const bytes = new TextEncoder().encode(`kisisel-merkez:${pin}`);
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    return [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('');
+  }
+
+  function openPinSettings() {
+    openSheet('Gizlilik', state.settings.pinHash ? 'PIN’i değiştir' : 'PIN belirle', `<form class="form" id="pin-form"><label class="field">Yeni PIN<input name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,6}" minlength="4" maxlength="6" required autocomplete="new-password" placeholder="4–6 rakam"></label><label class="field">PIN tekrar<input name="confirm" type="password" inputmode="numeric" pattern="[0-9]{4,6}" minlength="4" maxlength="6" required autocomplete="new-password"></label><p class="sheet-copy">Bu kilit cihazdaki günlük kullanım gizliliği içindir. PIN’i unutursan tarayıcı verilerini temizlemek uygulama kayıtlarını da siler.</p><div class="form-actions">${state.settings.pinHash ? '<button class="button danger" type="button" data-remove-pin>PIN’i kaldır</button>' : ''}<button class="button primary" type="submit">Kaydet</button></div></form>`, root => {
+      $('#pin-form', root).addEventListener('submit', async event => { event.preventDefault(); const data = new FormData(event.currentTarget); const pin = data.get('pin'); if (pin !== data.get('confirm')) return showToast('PIN’ler aynı değil'); state.settings.pinHash = await hashPin(pin); save(); closeSheet(); showToast('PIN kilidi açıldı'); });
+      $('[data-remove-pin]', root)?.addEventListener('click', () => { state.settings.pinHash = ''; save(); closeSheet(); showToast('PIN kilidi kaldırıldı'); });
+    });
+  }
+
+  function showPinLock() {
+    if (!state.settings.pinHash || $('#pin-lock')) return;
+    const lock = document.createElement('div');
+    lock.id = 'pin-lock';
+    lock.className = 'pin-lock';
+    lock.innerHTML = `<form class="pin-card"><div class="lock-icon">◈</div><h2>Kısa bir kontrol</h2><p>Kişisel Merkez PIN’ini gir.</p><input name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,6}" maxlength="6" required autocomplete="current-password" aria-label="PIN" autofocus><button class="button primary block" type="submit">Kilidi aç</button><span class="pin-error" role="status"></span></form>`;
+    document.body.appendChild(lock);
+    $('form', lock).addEventListener('submit', async event => { event.preventDefault(); const pin = new FormData(event.currentTarget).get('pin'); if (await hashPin(pin) === state.settings.pinHash) lock.remove(); else { $('.pin-error', lock).textContent = 'PIN yanlış'; $('input', lock).value = ''; $('input', lock).focus(); } });
   }
 
   async function enableNotifications() {
@@ -636,6 +785,8 @@
   }
 
   function exportBackup() {
+    state.settings.lastBackupAt = new Date().toISOString();
+    save();
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
@@ -643,6 +794,7 @@
     anchor.download = `kisisel-merkez-yedek-${todayISO()}.json`;
     anchor.click();
     URL.revokeObjectURL(url);
+    render();
     showToast('Yedek indirildi');
   }
 
@@ -652,7 +804,7 @@
       try {
         const imported = JSON.parse(reader.result);
         if (!imported || imported.version !== 1 || !Array.isArray(imported.tasks)) throw new Error('Geçersiz yedek');
-        state = imported; save(); applyTheme(); closeSheet(); render(); showToast('Yedek yüklendi');
+        state = normalizeState(imported); save(); applyTheme(); closeSheet(); syncRecurringTasks(); render(); if (state.settings.pinHash) showPinLock(); showToast('Yedek yüklendi');
       } catch (error) { showToast('Bu dosya geçerli bir Kişisel Merkez yedeği değil'); }
     };
     reader.readAsText(file);
@@ -709,7 +861,10 @@
           workouts: items.workouts.map(x => { const exercises = workoutExercises(x); return { id: x.id, title: x.title, time: x.time, completed: x.done, completedExercises: exercises.filter(item => item.done).length, totalExercises: exercises.length, exercises: exercises.map(item => ({ id: item.id, name: item.name, done: item.done })) }; }),
           todaySpending: items.expenses.reduce((sum, x) => sum + Number(x.amount), 0),
           todayIncome: state.incomes.filter(x => x.date === todayISO()).reduce((sum, x) => sum + Number(x.amount), 0),
-          sleepTarget: `${state.settings.bedtime}-${state.settings.wakeTime}`
+          sleepTarget: `${state.settings.bedtime}-${state.settings.wakeTime}`,
+          upcomingPayments: upcomingPayments().map(({ item, due }) => ({ title: item.title, amount: Number(item.amount), dueDate: toISO(due) })),
+          inboxNotes: state.inboxNotes.map(note => note.text),
+          goals: state.goals.map(goal => ({ id: goal.id, title: goal.title, current: goal.current, target: goal.target, unit: goal.unit }))
         };
       }
     });
@@ -724,6 +879,34 @@
         const task = { id: id(), title: requireText(input?.title, 'Görev adı'), date: requireDate(input?.date), time: optionalTime(input?.time), priority: Boolean(input?.priority), notes: typeof input?.notes === 'string' ? input.notes.trim().slice(0, 140) : '', done: false };
         state.tasks.push(task); save(); render();
         return { id: task.id, status: 'created', title: task.title, date: task.date };
+      }
+    });
+
+    register({
+      name: 'capture_note',
+      title: 'Hızlı not ekle',
+      description: 'Kişisel Merkez hızlı not kutusuna daha sonra işlenecek bir not ekler.',
+      inputSchema: { type: 'object', properties: { text: { type: 'string', minLength: 1, maxLength: 300 } }, required: ['text'], additionalProperties: false },
+      annotations: { readOnlyHint: false, untrustedContentHint: false },
+      execute(input) {
+        const note = { id: id(), text: requireText(input?.text, 'Not').slice(0, 300), createdAt: new Date().toISOString() };
+        state.inboxNotes.push(note); save(); render();
+        return { id: note.id, status: 'created', text: note.text };
+      }
+    });
+
+    register({
+      name: 'set_goal_progress',
+      title: 'Hedef ilerlemesini güncelle',
+      description: 'Mevcut bir hedefin güncel değerini değiştirir.',
+      inputSchema: { type: 'object', properties: { goalId: { type: 'string' }, current: { type: 'number', minimum: 0 } }, required: ['goalId', 'current'], additionalProperties: false },
+      annotations: { readOnlyHint: false, untrustedContentHint: false },
+      execute(input) {
+        const goal = state.goals.find(item => item.id === input?.goalId);
+        if (!goal) throw new Error('Hedef bulunamadı');
+        const current = Number(input.current); if (!Number.isFinite(current) || current < 0) throw new Error('Mevcut değer geçersiz');
+        goal.current = current; save(); render();
+        return { id: goal.id, status: 'updated', current: goal.current, target: goal.target };
       }
     });
 
@@ -821,6 +1004,9 @@
       if (button.dataset.add === 'expense') openExpenseForm(null, date);
       if (button.dataset.add === 'income') openIncomeForm(null, date);
       if (button.dataset.add === 'recurring-expense') openRecurringExpenseForm();
+      if (button.dataset.add === 'recurring-task') openRecurringTaskForm();
+      if (button.dataset.add === 'inbox') openInboxForm();
+      if (button.dataset.add === 'goal') openGoalForm();
       if (button.dataset.add === 'sleep') openSleepForm();
     }
     if (button.dataset.toggleTask) { const item = state.tasks.find(x => x.id === button.dataset.toggleTask); if (item) { item.done = !item.done; save(); render(); showToast(item.done ? 'Görev tamamlandı' : 'Görev yeniden açıldı'); } }
@@ -832,6 +1018,10 @@
     if (button.dataset.editIncome) openIncomeForm(state.incomes.find(x => x.id === button.dataset.editIncome));
     if (button.dataset.editRecurringExpense) openRecurringExpenseForm(state.recurringExpenses.find(x => x.id === button.dataset.editRecurringExpense));
     if (button.dataset.toggleRecurringPaid) { const item = state.recurringExpenses.find(x => x.id === button.dataset.toggleRecurringPaid); if (item) toggleRecurringPaid(item); }
+    if (button.dataset.editRecurringTask) openRecurringTaskForm(state.recurringTasks.find(x => x.id === button.dataset.editRecurringTask));
+    if (button.dataset.editGoal) openGoalForm(state.goals.find(x => x.id === button.dataset.editGoal));
+    if (button.dataset.inboxToTask) { const note = state.inboxNotes.find(x => x.id === button.dataset.inboxToTask); if (note) openTaskForm(null, todayISO(), note.text, note.id); }
+    if (button.dataset.deleteInbox) { state.inboxNotes = state.inboxNotes.filter(x => x.id !== button.dataset.deleteInbox); save(); render(); showToast('Not silindi'); }
     if (button.dataset.editSleep) openSleepForm(state.sleepEntries.find(x => x.id === button.dataset.editSleep));
     if (button.dataset.month) { calendarCursor.setMonth(calendarCursor.getMonth() + Number(button.dataset.month)); selectedCalendarDate = toISO(calendarCursor); renderCalendar(); }
     if (button.dataset.calendarDate) { selectedCalendarDate = button.dataset.calendarDate; renderCalendar(); }
@@ -842,6 +1032,9 @@
     if (button.hasAttribute('data-open-evaluation')) openEvaluation();
     if (button.hasAttribute('data-open-week-review')) openWeekReview();
     if (button.hasAttribute('data-open-budget-evaluation')) openBudgetEvaluation();
+    if (button.hasAttribute('data-open-week-planner')) openWeekPlanner();
+    if (button.hasAttribute('data-open-budget')) { planTab = 'budget'; setRoute('plans'); }
+    if (button.hasAttribute('data-export')) exportBackup();
   });
 
   $$('[data-route]').forEach(button => button.addEventListener('click', () => setRoute(button.dataset.route)));
@@ -851,7 +1044,7 @@
   document.addEventListener('keydown', event => { if (event.key === 'Escape' && !sheetBackdrop.hidden) closeSheet(); });
 
   fab.addEventListener('click', () => { quickMenu.hidden = !quickMenu.hidden; fab.setAttribute('aria-expanded', String(!quickMenu.hidden)); });
-  $$('[data-quick]').forEach(button => button.addEventListener('click', () => { quickMenu.hidden = true; fab.setAttribute('aria-expanded', 'false'); const type = button.dataset.quick; if (type === 'task') openTaskForm(); if (type === 'workout') openWorkoutForm(); if (type === 'expense') openExpenseForm(); if (type === 'income') openIncomeForm(); if (type === 'sleep') openSleepForm(); }));
+  $$('[data-quick]').forEach(button => button.addEventListener('click', () => { quickMenu.hidden = true; fab.setAttribute('aria-expanded', 'false'); const type = button.dataset.quick; if (type === 'task') openTaskForm(); if (type === 'workout') openWorkoutForm(); if (type === 'expense') openExpenseForm(); if (type === 'income') openIncomeForm(); if (type === 'sleep') openSleepForm(); if (type === 'inbox') openInboxForm(); }));
   document.addEventListener('click', event => { if (!quickMenu.hidden && !quickMenu.contains(event.target) && !fab.contains(event.target)) { quickMenu.hidden = true; fab.setAttribute('aria-expanded', 'false'); } });
 
   $('#backup-file').addEventListener('change', event => { const file = event.target.files[0]; if (file) importBackup(file); event.target.value = ''; });
@@ -859,6 +1052,7 @@
   if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(error => console.warn('Service worker kaydedilemedi', error)));
   applyTheme();
   render();
+  showPinLock();
   registerWebMCP();
   checkReminders();
   setInterval(checkReminders, 30000);

@@ -12,6 +12,9 @@ Tek kişi için hazırlanmış, iPhone ana ekranına kurulabilen kişisel planla
 - Aylık gelir-gider panosu, artış/azalış karşılaştırması ve birikim hedefi
 - Aylık bütçe, harcama kategorileri ve plansız gider takibi
 - Kira, fatura, abonelik ve kredi kartı ekstresi için aylık düzenli gider takibi
+- Tekrarlayan görevler, hızlı not kutusu ve 3 dakikalık haftalık planlama
+- Yaklaşan ödemeler, ay sonu bütçe tahmini ve sayısal hedefler
+- Aylık yedek hatırlatması ve isteğe bağlı PIN kilidi
 - Otomatik haftalık değerlendirme
 - Kişisel haftalık değerlendirme formu
 - ChatGPT'ye aktarılabilen haftalık özet
