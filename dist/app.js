@@ -39,7 +39,7 @@
     return {
       version: 1,
       profile: { name: 'Tolga' },
-      settings: { theme: 'auto', monthlyBudget: 20000, startingSavings: 0, savingsTarget: 100000, bedtime: '23:30', wakeTime: '07:00', notifications: false, lastBackupAt: '', pinHash: '' },
+      settings: { theme: 'auto', monthlyBudget: 20000, startingSavings: 0, bankSavings: 0, monthlySalary: 0, monthlyStatements: {}, savingsTarget: 100000, bedtime: '23:30', wakeTime: '07:00', notifications: false, lastBackupAt: '', pinHash: '' },
       tasks: [
         { id: id(), title: 'Bu haftanın 3 önceliğini belirle', date: today, time: '09:00', priority: true, done: false, notes: '' },
         { id: id(), title: 'Kişisel Merkez’i ana ekrana ekle', date: today, time: '20:00', priority: false, done: false, notes: 'Safari’de Paylaş → Ana Ekrana Ekle' }
@@ -48,6 +48,7 @@
         { id: id(), title: 'Üst vücut', date: today, time: '18:30', duration: 45, exercises: 'Şınav — 4×10\nRow — 4×10\nOmuz press — 3×12\nBiceps curl — 3×12', exerciseItems: [{ id: id(), name: 'Şınav — 4×10', done: false }, { id: id(), name: 'Row — 4×10', done: false }, { id: id(), name: 'Omuz press — 3×12', done: false }, { id: id(), name: 'Biceps curl — 3×12', done: false }], done: false },
         { id: id(), title: 'Alt vücut', date: addDays(today, 2), time: '18:30', duration: 45, exercises: 'Squat — 4×10\nLunge — 3×10\nHip hinge — 4×8\nCalf raise — 3×15', exerciseItems: [{ id: id(), name: 'Squat — 4×10', done: false }, { id: id(), name: 'Lunge — 3×10', done: false }, { id: id(), name: 'Hip hinge — 4×8', done: false }, { id: id(), name: 'Calf raise — 3×15', done: false }], done: false }
       ],
+      workoutTemplates: [],
       expenses: [],
       incomes: [],
       recurringExpenses: [],
@@ -55,12 +56,6 @@
       inboxNotes: [],
       goals: [],
       sleepEntries: [],
-      routine: [
-        { id: id(), title: 'Ekranları bırak', time: '22:45' },
-        { id: id(), title: 'Yarın için 3 öncelik seç', time: '23:00' },
-        { id: id(), title: 'Odayı hazırla', time: '23:15' }
-      ],
-      routineLogs: {},
       weeklyReviews: [],
       notified: {}
     };
@@ -76,10 +71,15 @@
 
   function normalizeState(saved) {
     const defaults = defaultState();
+    const savedSettings = saved.settings || {};
+    const settings = { ...defaults.settings, ...savedSettings };
+    if (savedSettings.bankSavings == null) settings.bankSavings = Number(savedSettings.startingSavings || 0);
+    if (!settings.monthlyStatements || typeof settings.monthlyStatements !== 'object') settings.monthlyStatements = {};
     return {
       ...defaults,
       ...saved,
-      settings: { ...defaults.settings, ...(saved.settings || {}) },
+      settings,
+      workoutTemplates: Array.isArray(saved.workoutTemplates) ? saved.workoutTemplates : [],
       recurringExpenses: Array.isArray(saved.recurringExpenses) ? saved.recurringExpenses : [],
       recurringTasks: Array.isArray(saved.recurringTasks) ? saved.recurringTasks : [],
       inboxNotes: Array.isArray(saved.inboxNotes) ? saved.inboxNotes : [],
@@ -138,6 +138,26 @@
 
   syncRecurringTasks();
 
+  function syncWorkoutTemplates() {
+    let changed = false;
+    const start = new Date(); start.setHours(12, 0, 0, 0);
+    state.workoutTemplates.forEach(template => {
+      for (let offset = 0; offset < 29; offset++) {
+        const date = new Date(start); date.setDate(date.getDate() + offset);
+        if (date.getDay() !== Number(template.weekday)) continue;
+        const iso = toISO(date);
+        if ((template.skippedDates || []).includes(iso)) continue;
+        if (state.workouts.some(workout => workout.templateId === template.id && workout.date === iso)) continue;
+        const names = String(template.exercises || '').split(/\r?\n/).map(name => name.trim()).filter(Boolean);
+        state.workouts.push({ id: id(), title: template.title, date: iso, time: template.time || '18:30', duration: Number(template.duration) || 45, exercises: names.join('\n'), exerciseItems: names.map(name => ({ id: id(), name, done: false })), done: false, templateId: template.id });
+        changed = true;
+      }
+    });
+    if (changed) save();
+  }
+
+  syncWorkoutTemplates();
+
   function showToast(message) {
     clearTimeout(toastTimer);
     toast.textContent = message;
@@ -195,7 +215,7 @@
     return {
       tasks: state.tasks.filter(item => item.date === today).sort((a, b) => `${!a.priority}${a.time}`.localeCompare(`${!b.priority}${b.time}`)),
       workouts: state.workouts.filter(item => item.date === today).sort((a, b) => a.time.localeCompare(b.time)),
-      sleep: state.sleepEntries.find(item => item.date === addDays(today, -1)) || null,
+      sleep: [...state.sleepEntries].filter(item => item.date <= today).sort((a, b) => b.date.localeCompare(a.date))[0] || null,
       expenses: state.expenses.filter(item => item.date === today)
     };
   }
@@ -235,8 +255,6 @@
     const focus = priorities.find(item => !item.done) || items.tasks.find(item => !item.done);
     const doneCount = priorities.filter(item => item.done).length;
     const todaySpend = items.expenses.reduce((sum, item) => sum + Number(item.amount), 0);
-    const dailyLimit = Number(state.settings.monthlyBudget || 0) / 30;
-    const routineDone = state.routineLogs[todayISO()] || [];
     const payments = upcomingPayments();
     setHeader(new Intl.DateTimeFormat('tr-TR', { day: 'numeric', month: 'long', weekday: 'long' }).format(new Date()), `${greeting()}, ${state.profile.name}`);
 
@@ -262,18 +280,16 @@
 
       <article class="card">
         <div class="row between">
-          <div class="row grow"><div class="module-icon">☾</div><div class="grow"><p class="item-title">Uyku hazırlığı</p><p class="item-detail">${esc(state.settings.bedtime)} yatış hedefi · ${routineDone.length} / ${state.routine.length} adım</p></div></div>
-          <button class="button" type="button" data-open-routine>Rutini aç</button>
+          <div class="row grow"><div class="module-icon">☾</div><div class="grow"><p class="item-title">Uyku kaydı</p><p class="item-detail">${items.sleep ? `Son kayıt: ${formatDuration(items.sleep.duration)} · Enerji ${items.sleep.energy}/5` : 'Bugün kaç saat uyuduğunu ekle'}</p></div></div>
+          <button class="button" type="button" data-add="sleep">Uyku ekle</button>
         </div>
-        <div class="progress-track"><span style="width:${state.routine.length ? (routineDone.length / state.routine.length) * 100 : 0}%"></span></div>
       </article>
 
       <article class="card">
         <div class="row between">
-          <div class="row grow"><div class="module-icon">₺</div><div class="grow"><p class="item-title">Bugünkü harcama</p><p class="item-detail">${money(todaySpend)} · günlük ortalama sınır ${money(dailyLimit)}</p></div></div>
+          <div class="row grow"><div class="module-icon">₺</div><div class="grow"><p class="item-title">Bugünkü harcama</p><p class="item-detail">${money(todaySpend)} ayrıntılı harcama kaydı</p></div></div>
           <button class="button" type="button" data-add="expense">Ekle</button>
         </div>
-        <div class="progress-track ${todaySpend > dailyLimit ? 'warn' : 'good'}"><span style="width:${clamp(dailyLimit ? todaySpend / dailyLimit * 100 : 0, 0, 100)}%"></span></div>
       </article>
       ${payments.length ? `<article class="card"><div class="row between"><div><p class="item-title">Yaklaşan ödemeler</p><p class="item-detail">7 gün içindeki ve geciken ${payments.length} kalem</p></div><button class="button" type="button" data-open-budget>Gör</button></div><div class="compact-list">${payments.slice(0, 4).map(({ item, due }) => `<div class="compact-row"><span class="grow">${esc(item.title)}<small>${due < new Date().setHours(0,0,0,0) ? 'Gecikti' : shortDate(toISO(due))}</small></span><strong>${money(item.amount)}</strong></div>`).join('')}</div></article>` : ''}
     </div>`;
@@ -369,19 +385,25 @@
     return weekly[Number(String(rule.schedule).split('-')[1])] || 'Her hafta';
   }
 
+  function weekdayLabel(weekday) {
+    return ['Her pazar', 'Her pazartesi', 'Her salı', 'Her çarşamba', 'Her perşembe', 'Her cuma', 'Her cumartesi'][Number(weekday)] || 'Her hafta';
+  }
+
   function renderWorkoutPlan() {
     const items = [...state.workouts].sort((a, b) => `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`));
-    return `<div class="row between"><div class="section-label">Spor programı</div><button class="button" type="button" data-add="workout">+ Antrenman</button></div>
-      ${items.length ? items.map(item => { const exercises = workoutExercises(item); const completed = exercises.filter(x => x.done).length; return `<article class="card ${item.done ? 'is-done' : ''}"><div class="row"><div class="module-icon">↗</div><div class="grow"><p class="item-title">${esc(item.title)}</p><p class="item-detail">${shortDate(item.date)} · ${esc(item.time)} · ${item.duration} dk · ${completed}/${exercises.length} hareket</p></div><button class="button ${item.done ? 'good' : ''}" type="button" data-workout-detail="${item.id}">${item.done ? 'Bitti' : 'Detay'}</button><button class="icon-button" type="button" data-edit-workout="${item.id}">···</button></div>${exercises.length ? `<div class="progress-track good"><span style="width:${completed / exercises.length * 100}%"></span></div>` : ''}</article>`; }).join('') : emptyInline('↗', 'Program boş', 'İlk antrenmanını tarih ve saatle planla.', 'Antrenman ekle', 'workout')}`;
+    const templates = [...state.workoutTemplates].sort((a, b) => Number(a.weekday) - Number(b.weekday) || String(a.time).localeCompare(String(b.time)));
+    return `<div class="row between"><div><div class="section-label">Haftalık programım</div><p class="item-detail">Bir kez kur; her hafta takvime otomatik gelsin</p></div><button class="button" type="button" data-add="workout-template">+ Program</button></div>
+      ${templates.length ? templates.map(template => { const exerciseCount = String(template.exercises || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean).length; return `<article class="card"><div class="row"><div class="module-icon">↻</div><div class="grow"><p class="item-title">${esc(template.title)}</p><p class="item-detail">${weekdayLabel(template.weekday)} · ${esc(template.time || 'Saat yok')} · ${Number(template.duration) || 45} dk · ${exerciseCount} hareket</p></div><button class="icon-button" type="button" data-edit-workout-template="${template.id}">···</button></div></article>`; }).join('') : `<article class="card empty-state"><div class="empty-icon">↻</div><h3>Haftalık program kurulmamış</h3><p>Aynı antrenmanı her hafta yeniden yazmadan uygula.</p><button class="button" type="button" data-add="workout-template">Haftalık program ekle</button></article>`}
+      <div class="row between"><div class="section-label">Takvimdeki antrenmanlar</div><button class="button" type="button" data-add="workout">+ Tek seferlik</button></div>
+      ${items.length ? items.map(item => { const exercises = workoutExercises(item); const completed = exercises.filter(x => x.done).length; return `<article class="card ${item.done ? 'is-done' : ''}"><div class="row"><div class="module-icon">↗</div><div class="grow"><p class="item-title">${esc(item.title)}</p><p class="item-detail">${shortDate(item.date)} · ${esc(item.time || 'Saat yok')} · ${item.duration} dk · ${completed}/${exercises.length} hareket${item.templateId ? ' · Haftalık' : ''}</p></div><button class="button ${item.done ? 'good' : ''}" type="button" data-workout-detail="${item.id}">${item.done ? 'Bitti' : 'Detay'}</button><button class="icon-button" type="button" data-edit-workout="${item.id}">···</button></div>${exercises.length ? `<div class="progress-track good"><span style="width:${completed / exercises.length * 100}%"></span></div>` : ''}</article>`; }).join('') : emptyInline('↗', 'Takvimde antrenman yok', 'Haftalık bir program kur veya tek seferlik antrenman ekle.', 'Antrenman ekle', 'workout')}`;
   }
 
   function renderSleepPlan() {
     const recent = [...state.sleepEntries].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 7);
     const avg = average(recent.map(x => x.duration));
-    return `<article class="card"><div class="row between"><div><p class="item-title">Uyku hedefi</p><p class="item-detail">${esc(state.settings.bedtime)} – ${esc(state.settings.wakeTime)}</p></div><button class="button" type="button" data-settings-sleep>Düzenle</button></div></article>
-      <div class="mini-grid"><div class="stat-card"><div class="stat-label">Son 7 kayıt</div><div class="stat-value">${formatDuration(avg)}</div><div class="stat-note">Ortalama süre</div></div><div class="stat-card"><div class="stat-label">Enerji</div><div class="stat-value">${recent.length ? `${average(recent.map(x => Number(x.energy))).toFixed(1)} / 5` : '—'}</div><div class="stat-note">Sabah hissi</div></div></div>
-      <div class="row between"><div class="section-label">Uyku kayıtları</div><button class="button" type="button" data-add="sleep">+ Kaydet</button></div>
-      ${recent.length ? recent.map(item => `<article class="card"><div class="row"><div class="module-icon">☾</div><div class="grow"><p class="item-title">${shortDate(item.date)} · ${formatDuration(item.duration)}</p><p class="item-detail">${esc(item.bedTime)} – ${esc(item.wakeTime)} · Enerji ${item.energy}/5 · Kalite ${item.quality}/5</p></div><button class="icon-button" type="button" data-edit-sleep="${item.id}">···</button></div></article>`).join('') : emptyInline('☾', 'Henüz uyku kaydı yok', 'Saatleri ve sabah enerjini gir; düzenini birlikte görelim.', 'İlk kaydı ekle', 'sleep')}`;
+    return `<div class="mini-grid"><div class="stat-card"><div class="stat-label">Son 7 kayıt</div><div class="stat-value">${formatDuration(avg)}</div><div class="stat-note">Ortalama süre</div></div><div class="stat-card"><div class="stat-label">Enerji</div><div class="stat-value">${recent.length ? `${average(recent.map(x => Number(x.energy))).toFixed(1)} / 5` : '—'}</div><div class="stat-note">Sabah hissi</div></div></div>
+      <div class="row between"><div><div class="section-label">Uyku kayıtları</div><p class="item-detail">Sadece toplam süre, enerji ve kalite</p></div><button class="button" type="button" data-add="sleep">+ Uyku ekle</button></div>
+      ${recent.length ? recent.map(item => `<article class="card"><div class="row"><div class="module-icon">☾</div><div class="grow"><p class="item-title">${shortDate(item.date)} · ${formatDuration(item.duration)}</p><p class="item-detail">Enerji ${item.energy}/5 · Kalite ${item.quality}/5</p></div><button class="icon-button" type="button" data-edit-sleep="${item.id}">···</button></div></article>`).join('') : emptyInline('☾', 'Henüz uyku kaydı yok', 'Uyuduğun toplam süreyi eklemen yeterli.', 'İlk kaydı ekle', 'sleep')}`;
   }
 
   function monthExpenses(date = new Date()) { const prefix = `${date.getFullYear()}-${pad(date.getMonth() + 1)}`; return state.expenses.filter(item => item.date.startsWith(prefix)); }
@@ -407,7 +429,7 @@
 
   function currentMonthKey(date = new Date()) { return `${date.getFullYear()}-${pad(date.getMonth() + 1)}`; }
 
-  function recurringTypeLabel(type) { return ({ fixed: 'Sabit gider', bill: 'Fatura / abonelik', statement: 'Kredi kartı ekstresi' })[type] || 'Düzenli gider'; }
+  function recurringTypeLabel(type) { return ({ fixed: 'Sabit gider', bill: 'Fatura / abonelik', statement: 'Eski ekstre kaydı' })[type] || 'Düzenli gider'; }
 
   function recurringDueLabel(item, paid) {
     if (paid) return 'Ödendi';
@@ -418,47 +440,39 @@
 
   function renderBudgetPlan() {
     const current = financialMonth();
-    const previousDate = new Date(); previousDate.setMonth(previousDate.getMonth() - 1);
-    const previous = financialMonth(previousDate);
     const items = [...current.incomes.map(item => ({ ...item, transactionType: 'income' })), ...current.expenses.map(item => ({ ...item, transactionType: 'expense' }))].sort((a, b) => b.date.localeCompare(a.date));
-    const spent = current.expense;
-    const limit = Number(state.settings.monthlyBudget || 0);
-    const byCategory = Object.entries(current.expenses.reduce((map, item) => { map[item.category] = (map[item.category] || 0) + Number(item.amount); return map; }, {})).sort((a, b) => b[1] - a[1]);
-    const bySource = Object.entries(current.incomes.reduce((map, item) => { map[item.source] = (map[item.source] || 0) + Number(item.amount); return map; }, {})).sort((a, b) => b[1] - a[1]);
-    const totalSavings = Number(state.settings.startingSavings || 0) + state.incomes.reduce((sum, item) => sum + Number(item.amount), 0) - state.expenses.reduce((sum, item) => sum + Number(item.amount), 0);
+    const bankSavings = Number(state.settings.bankSavings || 0);
+    const salary = Number(state.settings.monthlySalary || 0);
     const target = Number(state.settings.savingsTarget || 0);
-    const incomeDelta = changeLabel(current.income, previous.income);
-    const expenseDelta = changeLabel(current.expense, previous.expense, true);
-    const netDelta = changeLabel(Math.max(0, current.net), Math.max(0, previous.net));
-    const chartMonths = Array.from({ length: 6 }, (_, index) => { const date = new Date(); date.setDate(1); date.setMonth(date.getMonth() - 5 + index); return { date, ...financialMonth(date) }; });
-    const chartMax = Math.max(1, ...chartMonths.flatMap(item => [item.income, item.expense]));
     const monthKey = currentMonthKey();
+    const statement = Number(state.settings.monthlyStatements?.[monthKey] || 0);
     const recurring = [...state.recurringExpenses].sort((a, b) => Number(a.dueDay) - Number(b.dueDay));
-    const recurringTotal = recurring.reduce((sum, item) => sum + Number(item.amount), 0);
-    const recurringPaid = recurring.filter(item => (item.paidMonths || []).includes(monthKey)).reduce((sum, item) => sum + Number(item.amount), 0);
-    const unpaidCommitments = Math.max(0, recurringTotal - recurringPaid);
-    const forecastNet = current.income - current.expense - unpaidCommitments;
-    return `<article class="finance-hero"><div class="row between"><div><div class="stat-label">Toplam birikim</div><div class="finance-balance ${totalSavings < 0 ? 'money-negative' : ''}">${money(totalSavings)}</div><div class="finance-target">Hedef: ${money(target)} · %${target ? Math.round(clamp(totalSavings / target * 100, 0, 100)) : 0} tamamlandı</div></div><button class="button" type="button" data-settings-budget>Ayarla</button></div><div class="progress-track good"><span style="width:${target ? clamp(totalSavings / target * 100, 0, 100) : 0}%"></span></div></article>
-      <div class="finance-grid">
-        <div class="finance-tile"><div class="stat-label">Bu ay gelir</div><div class="stat-value money-positive">${money(current.income)}</div><div class="delta ${incomeDelta.tone}">${incomeDelta.text}</div></div>
-        <div class="finance-tile"><div class="stat-label">Bu ay gider</div><div class="stat-value">${money(current.expense)}</div><div class="delta ${expenseDelta.tone}">${expenseDelta.text}</div></div>
-        <div class="finance-tile"><div class="stat-label">Net birikim</div><div class="stat-value ${current.net >= 0 ? 'money-positive' : 'money-negative'}">${money(current.net)}</div><div class="delta ${netDelta.tone}">${netDelta.text}</div></div>
+    const regularRecurring = recurring.filter(item => item.type !== 'statement');
+    const recurringTotal = regularRecurring.filter(item => !item.includedInStatement).reduce((sum, item) => sum + Number(item.amount), 0);
+    const recurringInStatement = regularRecurring.filter(item => item.includedInStatement).reduce((sum, item) => sum + Number(item.amount), 0);
+    const recurringTrackedTotal = regularRecurring.reduce((sum, item) => sum + Number(item.amount), 0);
+    const recurringPaid = regularRecurring.filter(item => !item.includedInStatement && (item.paidMonths || []).includes(monthKey)).reduce((sum, item) => sum + Number(item.amount), 0);
+    const recurringPaidAll = regularRecurring.filter(item => (item.paidMonths || []).includes(monthKey)).reduce((sum, item) => sum + Number(item.amount), 0);
+    const monthRemainder = salary - recurringTotal - statement;
+    const projectedSavings = bankSavings + monthRemainder;
+    return `<article class="finance-hero"><div class="row between"><div><div class="stat-label">Bankadaki birikim</div><div class="finance-balance ${bankSavings < 0 ? 'money-negative' : ''}">${money(bankSavings)}</div><div class="finance-target">Hedef: ${money(target)} · %${target ? Math.round(clamp(bankSavings / target * 100, 0, 100)) : 0} tamamlandı</div></div><button class="button" type="button" data-settings-budget>Finansı güncelle</button></div><div class="progress-track good"><span style="width:${target ? clamp(bankSavings / target * 100, 0, 100) : 0}%"></span></div></article>
+      <div class="budget-core-grid">
+        <div class="finance-tile"><div class="stat-label">Aylık maaş</div><div class="stat-value money-positive">${money(salary)}</div></div>
+        <div class="finance-tile"><div class="stat-label">Ekstre dışı düzenli</div><div class="stat-value">${money(recurringTotal)}</div><div class="stat-note">${money(recurringPaid)} ödendi</div></div>
+        <div class="finance-tile"><div class="stat-label">Bu ayki ekstre</div><div class="stat-value">${money(statement)}</div></div>
+        <div class="finance-tile"><div class="stat-label">Ay sonunda kalacak</div><div class="stat-value ${monthRemainder >= 0 ? 'money-positive' : 'money-negative'}">${money(monthRemainder)}</div></div>
       </div>
-      <article class="card"><div class="row between"><div><p class="item-title">Gelir / gider gidişatı</p><p class="item-detail">Son 6 ay</p></div><div class="legend"><span>Gelir</span><span>Gider</span></div></div><div class="cashflow-chart">${chartMonths.map(item => `<div class="cashflow-month"><div class="cashflow-bars"><span class="cashflow-bar" style="height:${Math.max(3, item.income / chartMax * 100)}%" title="Gelir ${money(item.income)}"></span><span class="cashflow-bar expense" style="height:${Math.max(3, item.expense / chartMax * 100)}%" title="Gider ${money(item.expense)}"></span></div><span class="cashflow-label">${new Intl.DateTimeFormat('tr-TR', { month: 'short' }).format(item.date)}</span></div>`).join('')}</div></article>
-      <article class="card"><div class="row between"><div><p class="item-title">Aylık harcama sınırı</p><p class="item-detail">${money(spent)} / ${money(limit)} · ${money(Math.max(0, limit - spent))} kaldı</p></div><strong>%${limit ? Math.round(spent / limit * 100) : 0}</strong></div><div class="progress-track ${spent > limit ? 'warn' : 'good'}"><span style="width:${clamp(limit ? spent / limit * 100 : 0, 0, 100)}%"></span></div></article>
-      <article class="card forecast-card"><div class="row between"><div><p class="item-title">Ay sonu tahmini</p><p class="item-detail">Kayıtlı gelirden ödenen ve bekleyen düzenli giderler düşüldü.</p></div><strong class="${forecastNet >= 0 ? 'money-positive' : 'money-negative'}">${money(forecastNet)}</strong></div><div class="compact-list"><div class="compact-row"><span>Bekleyen düzenli gider</span><strong>${money(unpaidCommitments)}</strong></div><div class="compact-row"><span>Mevcut net</span><strong>${money(current.net)}</strong></div></div></article>
-      <div class="mini-grid"><div class="stat-card"><div class="stat-label">En yüksek gelir</div><div class="stat-value">${esc(bySource[0]?.[0] || '—')}</div><div class="stat-note">${bySource[0] ? money(bySource[0][1]) : 'Kayıt yok'}</div></div><div class="stat-card"><div class="stat-label">En yüksek gider</div><div class="stat-value">${esc(byCategory[0]?.[0] || '—')}</div><div class="stat-note">${byCategory[0] ? money(byCategory[0][1]) : 'Kayıt yok'}</div></div></div>
-      <div class="row between"><div><div class="section-label">Aylık düzenli giderler</div><p class="item-detail">Kira, faturalar, abonelikler ve ekstreler</p></div><button class="button" type="button" data-add="recurring-expense">+ Ekle</button></div>
-      ${recurring.length ? `<article class="card recurring-summary"><div class="row between"><div><p class="item-title">Bu ay ${money(recurringTotal)}</p><p class="item-detail">${money(recurringPaid)} ödendi · ${money(recurringTotal - recurringPaid)} bekliyor</p></div><strong>%${recurringTotal ? Math.round(recurringPaid / recurringTotal * 100) : 0}</strong></div><div class="progress-track good"><span style="width:${recurringTotal ? recurringPaid / recurringTotal * 100 : 0}%"></span></div></article><div class="recurring-list">${recurring.map(item => { const paid = (item.paidMonths || []).includes(monthKey); return `<article class="card"><div class="row"><div class="module-icon">↻</div><div class="grow"><p class="item-title">${esc(item.title)}</p><p class="item-detail">${recurringTypeLabel(item.type)} · ${esc(item.category)} · <span class="${!paid && new Date().getDate() > Number(item.dueDay) ? 'money-negative' : ''}">${recurringDueLabel(item, paid)}</span></p></div><strong>${money(item.amount)}</strong><button class="icon-button" type="button" data-edit-recurring-expense="${item.id}" aria-label="${esc(item.title)} giderini düzenle">···</button></div><button class="button block ${paid ? '' : 'primary'}" type="button" data-toggle-recurring-paid="${item.id}">${paid ? 'Ödemeyi geri al' : 'Ödendi olarak işaretle'}</button></article>`; }).join('')}</div>` : `<article class="card empty-state"><div class="empty-icon">↻</div><h3>Düzenli gider eklenmemiş</h3><p>Kira, fatura, abonelik veya aylık kredi kartı ekstreni ekle.</p><button class="button" type="button" data-add="recurring-expense">Düzenli gider ekle</button></article>`}
-      <div class="row between"><div class="section-label">Bu ayın hareketleri</div><div class="row"><button class="button" type="button" data-add="income">+ Gelir</button><button class="button" type="button" data-add="expense">+ Gider</button></div></div>
-      ${items.length ? items.map(item => item.transactionType === 'income' ? `<article class="card"><div class="row"><div class="module-icon">＋</div><div class="grow"><p class="item-title">${esc(item.note || item.source)}</p><p class="item-detail">${shortDate(item.date)} · ${esc(item.source)} · ${incomeKindLabel(item.kind)}</p></div><strong class="money-positive">+${money(item.amount)}</strong><button class="icon-button" type="button" data-edit-income="${item.id}">···</button></div></article>` : `<article class="card"><div class="row"><div class="module-icon">₺</div><div class="grow"><p class="item-title">${esc(item.note || item.category)}</p><p class="item-detail">${shortDate(item.date)} · ${esc(item.category)}${item.planned ? ' · Planlı' : ' · Plansız'}</p></div><strong>−${money(item.amount)}</strong><button class="icon-button" type="button" data-edit-expense="${item.id}">···</button></div></article>`).join('') : `<article class="card empty-state"><div class="empty-icon">₺</div><h3>Henüz finans hareketi yok</h3><p>Gelir veya gider eklediğinde pano otomatik hesaplanacak.</p><div class="row" style="justify-content:center"><button class="button" type="button" data-add="income">Gelir ekle</button><button class="button" type="button" data-add="expense">Gider ekle</button></div></article>`}`;
+      <article class="card forecast-card"><div class="row between"><div><p class="item-title">Tahmini toplam birikim</p><p class="item-detail">Banka birikimi + maaş − düzenli giderler − ekstre</p></div><strong class="${projectedSavings >= 0 ? 'money-positive' : 'money-negative'}">${money(projectedSavings)}</strong></div></article>
+      <div class="row between"><div><div class="section-label">Aylık düzenli giderler</div><p class="item-detail">Abonelikler, faturalar ve her ay tekrarlayan ödemeler</p></div><button class="button" type="button" data-add="recurring-expense">+ Ekle</button></div>
+      ${recurring.length ? `<article class="card recurring-summary"><div class="row between"><div><p class="item-title">Takip edilen ${money(recurringTrackedTotal)}</p><p class="item-detail">${money(recurringTotal)} ekstre dışında · ${money(recurringInStatement)} ekstre içinde</p></div><strong>%${recurringTrackedTotal ? Math.round(recurringPaidAll / recurringTrackedTotal * 100) : 0}</strong></div><div class="progress-track good"><span style="width:${recurringTrackedTotal ? recurringPaidAll / recurringTrackedTotal * 100 : 0}%"></span></div></article><div class="recurring-list">${recurring.map(item => { const paid = (item.paidMonths || []).includes(monthKey); const legacyStatement = item.type === 'statement'; return `<article class="card"><div class="row"><div class="module-icon">↻</div><div class="grow"><p class="item-title">${esc(item.title)}</p><p class="item-detail">${recurringTypeLabel(item.type)} · ${esc(item.category)}${legacyStatement ? ' · Hesaba dahil değil' : ` · ${item.includedInStatement ? 'Ekstre içinde' : 'Ekstre dışında'} · <span class="${!paid && new Date().getDate() > Number(item.dueDay) ? 'money-negative' : ''}">${recurringDueLabel(item, paid)}</span>`}</p></div><strong>${money(item.amount)}</strong><button class="icon-button" type="button" data-edit-recurring-expense="${item.id}" aria-label="${esc(item.title)} giderini düzenle">···</button></div>${legacyStatement ? '<p class="item-detail">Yeni toplam ekstre alanına taşıyıp bu kaydı silebilirsin.</p>' : `<button class="button block ${paid ? '' : 'primary'}" type="button" data-toggle-recurring-paid="${item.id}">${paid ? 'Ödemeyi geri al' : 'Ödendi olarak işaretle'}</button>`}</article>`; }).join('')}</div>` : `<article class="card empty-state"><div class="empty-icon">↻</div><h3>Düzenli gider eklenmemiş</h3><p>Abonelik, fatura veya her ay tekrarlayan bir ödemeyi ekle.</p><button class="button" type="button" data-add="recurring-expense">Düzenli gider ekle</button></article>`}
+      <div class="row between"><div><div class="section-label">İsteğe bağlı ayrıntılar</div><p class="item-detail">Ek gelir ve tekil harcamalar; ana maaş/ekstre hesabından ayrı tutulur</p></div><div class="row"><button class="button" type="button" data-add="income">+ Ek gelir</button><button class="button" type="button" data-add="expense">+ Harcama</button></div></div>
+      ${items.length ? items.map(item => item.transactionType === 'income' ? `<article class="card"><div class="row"><div class="module-icon">＋</div><div class="grow"><p class="item-title">${esc(item.note || item.source)}</p><p class="item-detail">${shortDate(item.date)} · ${esc(item.source)} · ${incomeKindLabel(item.kind)}</p></div><strong class="money-positive">+${money(item.amount)}</strong><button class="icon-button" type="button" data-edit-income="${item.id}">···</button></div></article>` : `<article class="card"><div class="row"><div class="module-icon">₺</div><div class="grow"><p class="item-title">${esc(item.note || item.category)}</p><p class="item-detail">${shortDate(item.date)} · ${esc(item.category)}${item.planned ? ' · Planlı' : ' · Plansız'}</p></div><strong>−${money(item.amount)}</strong><button class="icon-button" type="button" data-edit-expense="${item.id}">···</button></div></article>`).join('') : `<article class="card empty-state"><div class="empty-icon">₺</div><h3>Ayrıntılı hareket yok</h3><p>Bu alan isteğe bağlıdır; maaş, düzenli gider ve ekstre için kullanman gerekmez.</p></article>`}`;
   }
 
   function incomeKindLabel(kind) { return ({ regular: 'Düzenli', extra: 'Ekstra', investment: 'Yatırım getirisi' })[kind] || 'Ekstra'; }
 
   function average(values) { const usable = values.filter(value => Number.isFinite(Number(value))).map(Number); return usable.length ? usable.reduce((a, b) => a + b, 0) / usable.length : 0; }
   function formatDuration(minutes) { if (!minutes) return '—'; return `${Math.floor(minutes / 60)} sa ${Math.round(minutes % 60)} dk`; }
-  function sleepDuration(bed, wake) { const [bh, bm] = bed.split(':').map(Number); const [wh, wm] = wake.split(':').map(Number); let value = (wh * 60 + wm) - (bh * 60 + bm); if (value <= 0) value += 1440; return value; }
 
   function rangeMetrics(start, end) {
     const tasks = state.tasks.filter(x => x.date >= start && x.date <= end);
@@ -491,32 +505,24 @@
     if (m.taskTotal) parts.push(`${m.taskTotal} görevin ${m.taskDone} tanesini tamamladın (%${m.taskRate}).`); else parts.push('Bu hafta henüz görev kaydı yok.');
     if (m.workoutTotal) parts.push(`${m.workoutTotal} antrenmanın ${m.workoutDone} tanesi tamamlandı.`); else parts.push('Bu hafta spor planı görünmüyor.');
     if (m.sleepAvg) parts.push(`Ortalama uykun ${formatDuration(m.sleepAvg)}, sabah enerjin ${m.energyAvg.toFixed(1)}/5.`); else parts.push('Uyku düzenini yorumlamak için en az bir kayıt ekle.');
-    const weeklyLimit = Number(state.settings.monthlyBudget || 0) / 4.345;
-    parts.push(`Haftalık harcaman ${money(m.spend)}${weeklyLimit ? `; yaklaşık sınırın ${money(weeklyLimit)}` : ''}.`);
+    parts.push(`Bu hafta ayrıntılı kayıtlara eklediğin harcama ${money(m.spend)}.`);
     let focus = 'Gelecek hafta için tek bir net öncelik seç ve takvime saatini koy.';
-    if (m.sleepAvg && m.sleepAvg < 420) focus = 'Önce uykuyu düzelt: yatış saatini en az dört gece aynı aralıkta tut.';
+    if (m.sleepAvg && m.sleepAvg < 420) focus = 'Önce uykuyu düzelt: bu hafta en az dört gece 7 saatlik uyku alanı aç.';
     else if (m.taskTotal && m.taskRate < 60) focus = 'Yeni görev eklemeden önce açık iş sayısını azalt; gelecek haftaya en fazla üç öncelik taşı.';
-    else if (weeklyLimit && m.spend > weeklyLimit) focus = 'Değişken harcamalara haftalık bir üst sınır koy ve plansız giderleri ertesi güne beklet.';
     else if (m.workoutTotal && m.workoutDone < m.workoutTotal) focus = 'Eksik antrenmanı telafi etmeye çalışma; gelecek haftanın günlerini şimdiden sabitle.';
     return { title: m.taskRate >= 75 ? 'Ritmi koru, bir noktayı iyileştir' : m.taskRate >= 50 ? 'Temel iyi, odağı daralt' : 'Planı sadeleştir ve yeniden başla', body: parts.join(' '), focus, metrics: m };
   }
 
   function budgetEvaluation() {
-    const items = monthExpenses();
-    const incomes = monthIncomes();
-    const spent = items.reduce((sum, item) => sum + Number(item.amount), 0);
-    const income = incomes.reduce((sum, item) => sum + Number(item.amount), 0);
-    const net = income - spent;
-    const limit = Number(state.settings.monthlyBudget || 0);
-    const date = new Date();
-    const elapsed = date.getDate() / new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
-    const expected = limit * elapsed;
-    const categories = Object.entries(items.reduce((map, item) => { map[item.category] = (map[item.category] || 0) + Number(item.amount); return map; }, {})).sort((a, b) => b[1] - a[1]);
-    const unplanned = items.filter(x => !x.planned).reduce((sum, x) => sum + Number(x.amount), 0);
-    const pace = !limit ? 'Aylık sınırını belirlediğinde harcama hızını yorumlayabilirim.' : spent <= expected ? `Harcama hızın şu an planın ${money(expected - spent)} altında.` : `Harcama hızın şu an planın ${money(spent - expected)} üzerinde.`;
-    const detail = items.length || incomes.length ? `${pace} Bu ay ${money(income)} gelir ve ${money(spent)} gider kaydettin; net birikimin ${money(net)}. ${categories[0] ? `En yüksek gider kategorin ${categories[0][0]}: ${money(categories[0][1])}. ` : ''}Plansız harcamaların toplamı ${money(unplanned)}.` : 'Bu ay henüz gelir veya gider kaydı yok. Birkaç kayıt eklediğinde birikim ve harcama hızı değerlendirmesi oluşacak.';
-    const suggestion = net < 0 ? 'Bu ay gider geliri geçti. Önce zorunlu olmayan harcamaları durdur ve yeni gelirleri ayrı kaydet.' : spent > expected ? 'Kalan günler için günlük sınırı düşür ve plansız alımlarda 24 saat bekle.' : unplanned > spent * .3 ? 'Plansız harcamaların payını azaltmak için haftalık serbest harcama limiti koy.' : 'Net birikimin pozitif. Ekstra gelirlerin için önceden bir birikim veya yatırım oranı belirle.';
-    return { title: spent <= expected ? 'Bütçe plan içinde' : 'Harcama hızını düşür', detail, suggestion };
+    const salary = Number(state.settings.monthlySalary || 0);
+    const recurring = state.recurringExpenses.filter(item => item.type !== 'statement' && !item.includedInStatement).reduce((sum, item) => sum + Number(item.amount), 0);
+    const statement = Number(state.settings.monthlyStatements?.[currentMonthKey()] || 0);
+    const bankSavings = Number(state.settings.bankSavings || 0);
+    const remainder = salary - recurring - statement;
+    const projected = bankSavings + remainder;
+    const detail = salary || recurring || statement ? `Aylık maaşın ${money(salary)}, düzenli giderlerin ${money(recurring)} ve bu ayki toplam ekstren ${money(statement)}. Ay sonunda ${money(remainder)} kalması; banka birikiminin yaklaşık ${money(projected)} olması bekleniyor.` : 'Maaşını, düzenli giderlerini ve bu ayki ekstre toplamını girdiğinde net bir tahmin oluşacak.';
+    const suggestion = remainder < 0 ? `Bu ay gelirinden ${money(Math.abs(remainder))} fazla çıkış var. Ekstreyi ve zorunlu olmayan düzenli ödemeleri gözden geçir.` : remainder === 0 ? 'Bu ay gelir ve planlanan çıkış dengede. Ek harcamalar için pay kalmıyor.' : `Ay sonunda kalacak ${money(remainder)} için önceden birikime aktarılacak tutar belirle.`;
+    return { title: remainder >= 0 ? 'Aylık plan dengede' : 'Aylık açık görünüyor', detail, suggestion };
   }
 
   function renderProgress() {
@@ -530,11 +536,11 @@
         <div class="stat-card"><div class="stat-label">Öncelikler</div><div class="stat-value">${m.taskDone} / ${m.taskTotal}</div><div class="stat-note">%${m.taskRate} tamamlandı</div></div>
         <div class="stat-card"><div class="stat-label">Antrenman</div><div class="stat-value">${m.workoutDone} / ${m.workoutTotal}</div><div class="stat-note">Bu hafta</div></div>
         <div class="stat-card"><div class="stat-label">Uyku</div><div class="stat-value">${formatDuration(m.sleepAvg)}</div><div class="stat-note">Haftalık ortalama</div></div>
-        <div class="stat-card"><div class="stat-label">Bütçe</div><div class="stat-value">${money(m.spend)}</div><div class="stat-note">Son 7 gün</div></div>
+        <div class="stat-card"><div class="stat-label">Ek harcamalar</div><div class="stat-value">${money(m.spend)}</div><div class="stat-note">Son 7 gün</div></div>
       </div>
       <article class="card"><div class="row between"><div><p class="item-title">Dört haftalık gidişat</p><p class="item-detail">Tamamlanan görev oranı</p></div><span class="muted">↗</span></div><div class="bar-chart">${weeks.map((week, index) => `<div class="bar-column"><span class="bar-value">%${week.taskRate}</span><span class="bar" style="height:${Math.max(5, week.taskRate / maxRate * 100)}%"></span><span class="bar-label">${index === 3 ? 'Bu hafta' : `${4 - index} hf.`}</span></div>`).join('')}</div></article>
       <article class="card"><p class="item-title">Haftanın değerlendirmesi</p><p class="item-detail">Görev, spor, uyku ve bütçe kayıtlarından anında hazırlanır.</p><div class="action-grid"><button class="button primary" type="button" data-open-evaluation>Değerlendirmeyi aç</button><button class="button" type="button" data-open-week-review>Haftayı değerlendir</button></div></article>
-      <article class="card"><p class="item-title">Bütçe değerlendirmesi</p><p class="item-detail">Harcama hızını, kategorileri ve plansız giderleri yorumlar.</p><button class="button block" style="margin-top:12px" type="button" data-open-budget-evaluation>Bütçeyi değerlendir</button></article>
+      <article class="card"><p class="item-title">Bütçe değerlendirmesi</p><p class="item-detail">Maaş, düzenli giderler, ekstre ve banka birikimini birlikte yorumlar.</p><button class="button block" style="margin-top:12px" type="button" data-open-budget-evaluation>Bütçeyi değerlendir</button></article>
       <div class="row between"><div class="section-label">Hedeflerim</div><button class="button" type="button" data-add="goal">+ Hedef</button></div>
       ${state.goals.length ? state.goals.map(goal => { const percent = clamp(Number(goal.target) ? Number(goal.current) / Number(goal.target) * 100 : 0, 0, 100); return `<article class="card"><div class="row between"><div><p class="item-title">${esc(goal.title)}</p><p class="item-detail">${esc(String(goal.current))} / ${esc(String(goal.target))} ${esc(goal.unit || '')}</p></div><button class="icon-button" type="button" data-edit-goal="${goal.id}">···</button></div><div class="row between goal-progress"><div class="progress-track good grow"><span style="width:${percent}%"></span></div><strong>%${Math.round(percent)}</strong></div></article>`; }).join('') : `<article class="card empty-state"><div class="empty-icon">◎</div><h3>Hedef eklenmemiş</h3><p>Birikim, spor veya kişisel bir hedefi sayısal olarak takip et.</p><button class="button" type="button" data-add="goal">Hedef ekle</button></article>`}
       ${state.weeklyReviews.length ? `<div class="section-label">Kayıtlı değerlendirmeler</div>${[...state.weeklyReviews].sort((a,b)=>b.weekStart.localeCompare(a.weekStart)).slice(0,3).map(r => `<article class="card"><p class="item-title">${shortDate(r.weekStart)} haftası</p><p class="item-detail"><strong>İyi:</strong> ${esc(r.good || '—')}<br><strong>Zorluk:</strong> ${esc(r.hard || '—')}<br><strong>Odak:</strong> ${esc(r.focus || '—')}</p></article>`).join('')}` : ''}
@@ -572,8 +578,8 @@
 
   function openWeekPlanner() {
     const monday = startOfWeek(); monday.setDate(monday.getDate() + 7);
-    openSheet('3 dakikalık plan', 'Gelecek haftayı kur', `<form class="form" id="week-planner-form"><label class="field">Haftanın başlangıcı<input name="startDate" type="date" required value="${toISO(monday)}"></label><label class="field">Üç öncelik <span class="small">Her satıra bir tane</span><textarea name="priorities" maxlength="300" placeholder="En önemli iş&#10;İkinci öncelik&#10;Üçüncü öncelik"></textarea></label><fieldset class="choice-field"><legend>Spor günleri</legend><div class="choice-grid">${['Pzt','Sal','Çar','Per','Cum','Cmt','Paz'].map((day,index) => `<label><input type="checkbox" name="workoutDay" value="${index}"><span>${day}</span></label>`).join('')}</div></fieldset><div class="form-row"><label class="field">Yatış hedefi<input name="bedtime" type="time" required value="${state.settings.bedtime}"></label><label class="field">Kalkış hedefi<input name="wakeTime" type="time" required value="${state.settings.wakeTime}"></label></div><p class="sheet-copy">Kayıtlı düzenli ödemelerin yaklaşınca ana ekranda otomatik görünür.</p><button class="button primary block" type="submit">Haftayı oluştur</button></form>`, root => {
-      $('#week-planner-form', root).addEventListener('submit', event => { event.preventDefault(); const data = new FormData(event.currentTarget); const startDate = data.get('startDate'); const priorities = data.get('priorities').split(/\r?\n/).map(x => x.trim()).filter(Boolean).slice(0, 3); priorities.forEach((title,index) => state.tasks.push({ id: id(), title, date: addDays(startDate, index * 2), time: '09:00', priority: true, done: false, notes: 'Haftalık plan' })); data.getAll('workoutDay').forEach(day => { const date = addDays(startDate, Number(day)); if (!state.workouts.some(x => x.date === date)) state.workouts.push({ id: id(), title: 'Antrenman', date, time: '18:30', duration: 45, exercises: '', exerciseItems: [], done: false }); }); state.settings.bedtime = data.get('bedtime'); state.settings.wakeTime = data.get('wakeTime'); save(); closeSheet(); render(); showToast('Gelecek hafta hazır'); });
+    openSheet('3 dakikalık plan', 'Gelecek haftayı kur', `<form class="form" id="week-planner-form"><label class="field">Haftanın başlangıcı<input name="startDate" type="date" required value="${toISO(monday)}"></label><label class="field">Üç öncelik <span class="small">Her satıra bir tane</span><textarea name="priorities" maxlength="300" placeholder="En önemli iş&#10;İkinci öncelik&#10;Üçüncü öncelik"></textarea></label><fieldset class="choice-field"><legend>Spor günleri</legend><div class="choice-grid">${['Pzt','Sal','Çar','Per','Cum','Cmt','Paz'].map((day,index) => `<label><input type="checkbox" name="workoutDay" value="${index}"><span>${day}</span></label>`).join('')}</div></fieldset><p class="sheet-copy">Kayıtlı düzenli ödemelerin yaklaşınca ana ekranda otomatik görünür.</p><button class="button primary block" type="submit">Haftayı oluştur</button></form>`, root => {
+      $('#week-planner-form', root).addEventListener('submit', event => { event.preventDefault(); const data = new FormData(event.currentTarget); const startDate = data.get('startDate'); const priorities = data.get('priorities').split(/\r?\n/).map(x => x.trim()).filter(Boolean).slice(0, 3); priorities.forEach((title,index) => state.tasks.push({ id: id(), title, date: addDays(startDate, index * 2), time: '09:00', priority: true, done: false, notes: 'Haftalık plan' })); data.getAll('workoutDay').forEach(day => { const date = addDays(startDate, Number(day)); if (!state.workouts.some(x => x.date === date)) state.workouts.push({ id: id(), title: 'Antrenman', date, time: '18:30', duration: 45, exercises: '', exerciseItems: [], done: false }); }); save(); closeSheet(); render(); showToast('Gelecek hafta hazır'); });
     });
   }
 
@@ -594,8 +600,34 @@
       <div class="form-row"><label class="field">Tarih<input name="date" type="date" required value="${item.date}"></label><label class="field">Saat<input name="time" type="time" value="${item.time || ''}"></label></div>
       <label class="field">Süre (dakika)<input name="duration" type="number" min="5" max="300" required value="${item.duration}"></label>
       <label class="field">Hareketler <span class="small">Her satıra bir hareket; set ve tekrarı yanına yaz.</span><textarea name="exercises" maxlength="800" placeholder="Bench press — 4×8&#10;Row — 4×10&#10;Lateral raise — 3×12">${esc(exerciseText)}</textarea></label>${formActions(Boolean(existing))}</form>`, root => {
-      $('#item-form', root).addEventListener('submit', event => { event.preventDefault(); const data = new FormData(event.currentTarget); const exerciseNames = data.get('exercises').split(/\r?\n/).map(name => name.trim()).filter(Boolean); const exerciseItems = exerciseNames.map(name => { const previous = existingExercises.find(x => x.name.toLocaleLowerCase('tr-TR') === name.toLocaleLowerCase('tr-TR')); return { id: previous?.id || id(), name, done: previous?.done || false }; }); const next = { id: existing?.id || id(), title: data.get('title').trim(), date: data.get('date'), time: data.get('time'), duration: Number(data.get('duration')), exercises: exerciseNames.join('\n'), exerciseItems, done: exerciseItems.length ? exerciseItems.every(x => x.done) : (existing?.done || false) }; if (existing) Object.assign(existing, next); else state.workouts.push(next); save(); closeSheet(); render(); showToast('Antrenman kaydedildi'); });
-      $('[data-delete-item]', root)?.addEventListener('click', () => { state.workouts = state.workouts.filter(x => x.id !== existing.id); save(); closeSheet(); render(); showToast('Antrenman silindi'); });
+      $('#item-form', root).addEventListener('submit', event => { event.preventDefault(); const data = new FormData(event.currentTarget); const exerciseNames = data.get('exercises').split(/\r?\n/).map(name => name.trim()).filter(Boolean); const exerciseItems = exerciseNames.map(name => { const previous = existingExercises.find(x => x.name.toLocaleLowerCase('tr-TR') === name.toLocaleLowerCase('tr-TR')); return { id: previous?.id || id(), name, done: previous?.done || false }; }); const movedFromTemplateDate = existing?.templateId && existing.date !== data.get('date'); if (movedFromTemplateDate) { const template = state.workoutTemplates.find(x => x.id === existing.templateId); if (template) template.skippedDates = [...new Set([...(template.skippedDates || []), existing.date])]; } const next = { id: existing?.id || id(), title: data.get('title').trim(), date: data.get('date'), time: data.get('time'), duration: Number(data.get('duration')), exercises: exerciseNames.join('\n'), exerciseItems, done: exerciseItems.length ? exerciseItems.every(x => x.done) : (existing?.done || false), ...(existing?.templateId && !movedFromTemplateDate ? { templateId: existing.templateId } : {}) }; if (existing) { if (movedFromTemplateDate) delete existing.templateId; Object.assign(existing, next); } else state.workouts.push(next); save(); closeSheet(); render(); showToast('Antrenman kaydedildi'); });
+      $('[data-delete-item]', root)?.addEventListener('click', () => { if (existing.templateId) { const template = state.workoutTemplates.find(x => x.id === existing.templateId); if (template) template.skippedDates = [...new Set([...(template.skippedDates || []), existing.date])]; } state.workouts = state.workouts.filter(x => x.id !== existing.id); save(); closeSheet(); render(); showToast('Antrenman silindi'); });
+    });
+  }
+
+  function openWorkoutTemplateForm(existing) {
+    const item = existing || { title: '', weekday: 1, time: '18:30', duration: 45, exercises: '', skippedDates: [] };
+    openSheet('Haftalık spor döngüsü', existing ? 'Programı düzenle' : 'Program ekle', `<form class="form" id="workout-template-form">
+      <label class="field">Antrenman adı<input name="title" maxlength="80" required value="${esc(item.title)}" placeholder="Örn. Üst vücut"></label>
+      <div class="form-row"><label class="field">Her hafta<select name="weekday">${['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'].map((day, index) => `<option value="${index}" ${Number(item.weekday) === index ? 'selected' : ''}>${day}</option>`).join('')}</select></label><label class="field">Saat<input name="time" type="time" value="${item.time || ''}"></label></div>
+      <label class="field">Süre (dakika)<input name="duration" type="number" min="5" max="300" required value="${item.duration}"></label>
+      <label class="field">Hareketler <span class="small">Her satıra bir hareket; set ve tekrarı yanına yaz.</span><textarea name="exercises" maxlength="800" placeholder="Bench press — 4×8&#10;Row — 4×10&#10;Lateral raise — 3×12">${esc(item.exercises || '')}</textarea></label>
+      <p class="sheet-copy">Program önümüzdeki dört haftanın takvimine otomatik eklenir. Her haftanın hareketlerini ayrı ayrı işaretleyebilirsin.</p>${formActions(Boolean(existing))}</form>`, root => {
+      $('#workout-template-form', root).addEventListener('submit', event => {
+        event.preventDefault();
+        const data = new FormData(event.currentTarget);
+        const next = { id: existing?.id || id(), title: data.get('title').trim(), weekday: Number(data.get('weekday')), time: data.get('time'), duration: Number(data.get('duration')), exercises: data.get('exercises').split(/\r?\n/).map(x => x.trim()).filter(Boolean).join('\n'), skippedDates: existing?.skippedDates || [] };
+        if (existing) {
+          Object.assign(existing, next);
+          state.workouts = state.workouts.filter(workout => workout.templateId !== existing.id || workout.done || workout.date < todayISO());
+        } else state.workoutTemplates.push(next);
+        syncWorkoutTemplates(); save(); closeSheet(); render(); showToast('Haftalık program kaydedildi');
+      });
+      $('[data-delete-item]', root)?.addEventListener('click', () => {
+        state.workoutTemplates = state.workoutTemplates.filter(template => template.id !== existing.id);
+        state.workouts = state.workouts.filter(workout => workout.templateId !== existing.id || workout.done || workout.date < todayISO());
+        save(); closeSheet(); render(); showToast('Haftalık program silindi');
+      });
     });
   }
 
@@ -639,15 +671,16 @@
   }
 
   function openRecurringExpenseForm(existing) {
-    const item = existing || { title: '', amount: '', type: 'fixed', category: 'Fatura', dueDay: 1, paidMonths: [] };
-    const categories = ['Kira', 'Fatura', 'Abonelik', 'Kredi kartı', 'Aidat', 'Kredi', 'Sigorta', 'Diğer'];
+    const item = existing || { title: '', amount: '', type: 'fixed', category: 'Abonelik', dueDay: 1, paidMonths: [], includedInStatement: true };
+    const categories = ['Fatura', 'Abonelik', 'Aidat', 'Kredi', 'Sigorta', 'Diğer'];
     openSheet('Bütçe', existing ? 'Düzenli gideri düzenle' : 'Düzenli gider ekle', `<form class="form" id="recurring-expense-form">
-      <label class="field">Gider adı<input name="title" maxlength="80" required value="${esc(item.title)}" placeholder="Kira, elektrik, kredi kartı ekstresi..."></label>
+      <label class="field">Gider adı<input name="title" maxlength="80" required value="${esc(item.title)}" placeholder="İnternet, Netflix, elektrik..."></label>
       <label class="field">Bu ayki tutar (TL)<input name="amount" type="number" min="0.01" step="0.01" inputmode="decimal" required value="${item.amount}" placeholder="0"></label>
-      <div class="form-row"><label class="field">Tür<select name="type"><option value="fixed" ${item.type === 'fixed' ? 'selected' : ''}>Sabit gider</option><option value="bill" ${item.type === 'bill' ? 'selected' : ''}>Fatura / abonelik</option><option value="statement" ${item.type === 'statement' ? 'selected' : ''}>Kredi kartı ekstresi</option></select></label><label class="field">Kategori<select name="category">${categories.map(x => `<option ${x === item.category ? 'selected' : ''}>${x}</option>`).join('')}</select></label></div>
+      <div class="form-row"><label class="field">Tür<select name="type"><option value="fixed" ${item.type === 'fixed' || item.type === 'statement' ? 'selected' : ''}>Sabit gider</option><option value="bill" ${item.type === 'bill' ? 'selected' : ''}>Fatura / abonelik</option></select></label><label class="field">Kategori<select name="category">${categories.map(x => `<option ${x === item.category ? 'selected' : ''}>${x}</option>`).join('')}</select></label></div>
       <label class="field">Son ödeme günü<input name="dueDay" type="number" min="1" max="31" required value="${item.dueDay}"></label>
-      <p class="sheet-copy">Ekstre ve fatura tutarı değiştiğinde kalemi düzenleyebilirsin. “Ödendi” dediğinde bu ayın giderlerine otomatik eklenir.</p>${formActions(Boolean(existing))}</form>`, root => {
-      $('#recurring-expense-form', root).addEventListener('submit', event => { event.preventDefault(); const data = new FormData(event.currentTarget); const next = { id: existing?.id || id(), title: data.get('title').trim(), amount: Number(data.get('amount')), type: data.get('type'), category: data.get('category'), dueDay: Number(data.get('dueDay')), paidMonths: existing?.paidMonths || [] }; if (existing) { Object.assign(existing, next); const payment = state.expenses.find(x => x.recurringExpenseId === existing.id && x.recurringMonth === currentMonthKey()); if (payment) { payment.amount = next.amount; payment.category = next.category; payment.note = next.title; } } else state.recurringExpenses.push(next); save(); closeSheet(); render(); showToast('Düzenli gider kaydedildi'); });
+      <label class="checkbox-field"><input name="includedInStatement" type="checkbox" ${item.includedInStatement ? 'checked' : ''}> Bu ödeme kredi kartı ekstresinin içinde</label>
+      <p class="sheet-copy">İşaretlersen ödeme takip edilir fakat toplam ekstrede zaten bulunduğu için bütçeden ikinci kez düşülmez.</p>${formActions(Boolean(existing))}</form>`, root => {
+      $('#recurring-expense-form', root).addEventListener('submit', event => { event.preventDefault(); const data = new FormData(event.currentTarget); const next = { id: existing?.id || id(), title: data.get('title').trim(), amount: Number(data.get('amount')), type: data.get('type'), category: data.get('category'), dueDay: Number(data.get('dueDay')), includedInStatement: data.get('includedInStatement') === 'on', paidMonths: existing?.paidMonths || [] }; if (existing) { Object.assign(existing, next); const payment = state.expenses.find(x => x.recurringExpenseId === existing.id && x.recurringMonth === currentMonthKey()); if (payment) { payment.amount = next.amount; payment.category = next.category; payment.note = next.title; } } else state.recurringExpenses.push(next); save(); closeSheet(); render(); showToast('Düzenli gider kaydedildi'); });
       $('[data-delete-item]', root)?.addEventListener('click', () => { state.recurringExpenses = state.recurringExpenses.filter(x => x.id !== existing.id); save(); closeSheet(); render(); showToast('Düzenli gider silindi'); });
     });
   }
@@ -669,34 +702,22 @@
   }
 
   function openSleepForm(existing) {
-    const item = existing || { date: addDays(todayISO(), -1), bedTime: state.settings.bedtime, wakeTime: state.settings.wakeTime, energy: 3, quality: 3 };
+    const item = existing || { date: todayISO(), duration: 450, energy: 3, quality: 3 };
+    const hours = Math.floor(Number(item.duration || 0) / 60);
+    const minutes = Math.round(Number(item.duration || 0) % 60);
     openSheet('Uyku', existing ? 'Uyku kaydını düzenle' : 'Uyku kaydet', `<form class="form" id="item-form">
-      <label class="field">Uyandığın gün<input name="date" type="date" required value="${item.date}"></label>
-      <div class="form-row"><label class="field">Yatış<input name="bedTime" type="time" required value="${item.bedTime}"></label><label class="field">Kalkış<input name="wakeTime" type="time" required value="${item.wakeTime}"></label></div>
+      <label class="field">Tarih<input name="date" type="date" required value="${item.date}"></label>
+      <div class="form-row"><label class="field">Uyku süresi — saat<input name="hours" type="number" min="0" max="24" step="1" inputmode="numeric" required value="${hours}"></label><label class="field">Dakika<input name="minutes" type="number" min="0" max="59" step="5" inputmode="numeric" required value="${minutes}"></label></div>
       <div class="form-row"><label class="field">Sabah enerjisi<select name="energy">${[1,2,3,4,5].map(x => `<option value="${x}" ${Number(item.energy) === x ? 'selected' : ''}>${x} / 5</option>`).join('')}</select></label><label class="field">Uyku kalitesi<select name="quality">${[1,2,3,4,5].map(x => `<option value="${x}" ${Number(item.quality) === x ? 'selected' : ''}>${x} / 5</option>`).join('')}</select></label></div>${formActions(Boolean(existing))}</form>`, root => {
-      $('#item-form', root).addEventListener('submit', event => { event.preventDefault(); const data = new FormData(event.currentTarget); const bedTime = data.get('bedTime'); const wakeTime = data.get('wakeTime'); const next = { id: existing?.id || id(), date: data.get('date'), bedTime, wakeTime, energy: Number(data.get('energy')), quality: Number(data.get('quality')), duration: sleepDuration(bedTime, wakeTime) }; if (existing) Object.assign(existing, next); else { state.sleepEntries = state.sleepEntries.filter(x => x.date !== next.date); state.sleepEntries.push(next); } save(); closeSheet(); render(); showToast('Uyku kaydedildi'); });
+      $('#item-form', root).addEventListener('submit', event => { event.preventDefault(); const data = new FormData(event.currentTarget); const duration = Number(data.get('hours')) * 60 + Number(data.get('minutes')); if (duration <= 0 || duration > 1440) return showToast('Uyku süresi 1 dakika ile 24 saat arasında olmalı'); const next = { id: existing?.id || id(), date: data.get('date'), energy: Number(data.get('energy')), quality: Number(data.get('quality')), duration }; if (existing) Object.assign(existing, next); else { state.sleepEntries = state.sleepEntries.filter(x => x.date !== next.date); state.sleepEntries.push(next); } save(); closeSheet(); render(); showToast('Uyku kaydedildi'); });
       $('[data-delete-item]', root)?.addEventListener('click', () => { state.sleepEntries = state.sleepEntries.filter(x => x.id !== existing.id); save(); closeSheet(); render(); showToast('Uyku kaydı silindi'); });
     });
   }
 
-  function openRoutine() {
-    const date = todayISO();
-    const done = state.routineLogs[date] || [];
-    openSheet('Akşam rutini', `${state.settings.bedtime} için hazırlan`, `<div class="stack">${state.routine.map(item => `<button class="list-item clickable ${done.includes(item.id) ? 'is-done' : ''}" type="button" data-routine="${item.id}"><span class="check-button ${done.includes(item.id) ? 'done' : ''}">✓</span><span class="grow"><span class="item-title">${esc(item.title)}</span><br><span class="item-detail">${esc(item.time)}</span></span></button>`).join('')}<button class="button" type="button" data-settings-sleep>Uyku hedefini düzenle</button></div>`, root => {
-      $$('[data-routine]', root).forEach(button => button.addEventListener('click', () => { const list = state.routineLogs[date] || []; state.routineLogs[date] = list.includes(button.dataset.routine) ? list.filter(x => x !== button.dataset.routine) : [...list, button.dataset.routine]; save(); closeSheet(); openRoutine(); render(); }));
-      $('[data-settings-sleep]', root).addEventListener('click', openSleepSettings);
-    });
-  }
-
-  function openSleepSettings() {
-    openSheet('Ayar', 'Uyku hedefi', `<form class="form" id="sleep-settings-form"><div class="form-row"><label class="field">Yatış hedefi<input name="bedtime" type="time" required value="${state.settings.bedtime}"></label><label class="field">Kalkış hedefi<input name="wakeTime" type="time" required value="${state.settings.wakeTime}"></label></div><button class="button primary block" type="submit">Kaydet</button></form>`, root => {
-      $('#sleep-settings-form', root).addEventListener('submit', event => { event.preventDefault(); const data = new FormData(event.currentTarget); state.settings.bedtime = data.get('bedtime'); state.settings.wakeTime = data.get('wakeTime'); save(); closeSheet(); render(); showToast('Uyku hedefi güncellendi'); });
-    });
-  }
-
   function openBudgetSettings() {
-    openSheet('Ayar', 'Bütçe ve birikim', `<form class="form" id="budget-settings-form"><label class="field">Aylık harcama sınırı (TL)<input name="monthlyBudget" type="number" min="0" step="100" required value="${state.settings.monthlyBudget}"></label><div class="form-row"><label class="field">Başlangıç birikimi (TL)<input name="startingSavings" type="number" step="100" required value="${state.settings.startingSavings}"></label><label class="field">Birikim hedefi (TL)<input name="savingsTarget" type="number" min="0" step="100" required value="${state.settings.savingsTarget}"></label></div><p class="sheet-copy">Gelir ve gider kayıtlarından önce elinde olan birikimi yaz. Pano sonraki tüm hareketleri bunun üzerine ekler.</p><button class="button primary block" type="submit">Kaydet</button></form>`, root => {
-      $('#budget-settings-form', root).addEventListener('submit', event => { event.preventDefault(); const data = new FormData(event.currentTarget); state.settings.monthlyBudget = Number(data.get('monthlyBudget')); state.settings.startingSavings = Number(data.get('startingSavings')); state.settings.savingsTarget = Number(data.get('savingsTarget')); save(); closeSheet(); render(); showToast('Bütçe ve birikim güncellendi'); });
+    const monthKey = currentMonthKey();
+    openSheet('Bütçe', 'Bu ayın finans bilgileri', `<form class="form" id="budget-settings-form"><label class="field">Bankadaki birikim (TL)<input name="bankSavings" type="number" step="100" required value="${state.settings.bankSavings || 0}"></label><div class="form-row"><label class="field">Aylık maaş (TL)<input name="monthlySalary" type="number" min="0" step="100" required value="${state.settings.monthlySalary || 0}"></label><label class="field">Bu ayın toplam ekstresi (TL)<input name="statement" type="number" min="0" step="0.01" required value="${state.settings.monthlyStatements?.[monthKey] || 0}"></label></div><label class="field">Birikim hedefi (TL)<input name="savingsTarget" type="number" min="0" step="100" required value="${state.settings.savingsTarget}"></label><p class="sheet-copy">Maaş, düzenli giderler ve ekstre ayrı tutulur. Ay sonunda kalacak tutar bu üç kalemden hesaplanır; banka birikimin manuel bir bakiyedir.</p><button class="button primary block" type="submit">Finansı güncelle</button></form>`, root => {
+      $('#budget-settings-form', root).addEventListener('submit', event => { event.preventDefault(); const data = new FormData(event.currentTarget); state.settings.bankSavings = Number(data.get('bankSavings')); state.settings.monthlySalary = Number(data.get('monthlySalary')); state.settings.monthlyStatements = { ...(state.settings.monthlyStatements || {}), [monthKey]: Number(data.get('statement')) }; state.settings.savingsTarget = Number(data.get('savingsTarget')); save(); closeSheet(); render(); showToast('Bu ayın finans bilgileri güncellendi'); });
     });
   }
 
@@ -732,7 +753,7 @@
 
   function openBudgetEvaluation() {
     const e = budgetEvaluation();
-    openSheet('Bütçe değerlendirmesi', e.title, `<p class="sheet-copy">${esc(e.detail)}</p><div class="evaluation-box"><strong>Öneri:</strong><br>${esc(e.suggestion)}</div><div class="action-grid"><button class="button" type="button" data-add="income">Gelir ekle</button><button class="button" type="button" data-add="expense">Gider ekle</button></div>`, root => { $('[data-add="income"]', root).addEventListener('click', () => openIncomeForm()); $('[data-add="expense"]', root).addEventListener('click', () => openExpenseForm()); });
+    openSheet('Bütçe değerlendirmesi', e.title, `<p class="sheet-copy">${esc(e.detail)}</p><div class="evaluation-box"><strong>Öneri:</strong><br>${esc(e.suggestion)}</div><div class="action-grid"><button class="button primary" type="button" data-update-finance>Finansı güncelle</button><button class="button" type="button" data-add-recurring>Düzenli gider ekle</button></div>`, root => { $('[data-update-finance]', root).addEventListener('click', openBudgetSettings); $('[data-add-recurring]', root).addEventListener('click', () => openRecurringExpenseForm()); });
   }
 
   function openSettings() {
@@ -855,13 +876,19 @@
       annotations: { readOnlyHint: true, untrustedContentHint: false },
       execute() {
         const items = todayItems();
+        const monthKey = currentMonthKey();
+        const salary = Number(state.settings.monthlySalary || 0);
+        const recurringExpenses = state.recurringExpenses.filter(item => item.type !== 'statement' && !item.includedInStatement).reduce((sum, item) => sum + Number(item.amount), 0);
+        const statement = Number(state.settings.monthlyStatements?.[monthKey] || 0);
         return {
           date: todayISO(),
           tasks: { total: items.tasks.length, completed: items.tasks.filter(x => x.done).length, priorities: items.tasks.filter(x => x.priority).map(x => x.title) },
           workouts: items.workouts.map(x => { const exercises = workoutExercises(x); return { id: x.id, title: x.title, time: x.time, completed: x.done, completedExercises: exercises.filter(item => item.done).length, totalExercises: exercises.length, exercises: exercises.map(item => ({ id: item.id, name: item.name, done: item.done })) }; }),
+          weeklyWorkoutProgram: state.workoutTemplates.map(template => ({ id: template.id, title: template.title, weekday: Number(template.weekday), time: template.time, duration: Number(template.duration) })),
           todaySpending: items.expenses.reduce((sum, x) => sum + Number(x.amount), 0),
           todayIncome: state.incomes.filter(x => x.date === todayISO()).reduce((sum, x) => sum + Number(x.amount), 0),
-          sleepTarget: `${state.settings.bedtime}-${state.settings.wakeTime}`,
+          latestSleep: items.sleep ? { date: items.sleep.date, durationMinutes: items.sleep.duration, energy: items.sleep.energy, quality: items.sleep.quality } : null,
+          budget: { month: monthKey, bankSavings: Number(state.settings.bankSavings || 0), monthlySalary: salary, recurringExpenses, statement, monthRemainder: salary - recurringExpenses - statement },
           upcomingPayments: upcomingPayments().map(({ item, due }) => ({ title: item.title, amount: Number(item.amount), dueDate: toISO(due) })),
           inboxNotes: state.inboxNotes.map(note => note.text),
           goals: state.goals.map(goal => ({ id: goal.id, title: goal.title, current: goal.current, target: goal.target, unit: goal.unit }))
@@ -927,6 +954,22 @@
     });
 
     register({
+      name: 'create_weekly_workout',
+      title: 'Haftalık spor programı oluştur',
+      description: 'Her hafta aynı gün tekrarlanan bir antrenman programı oluşturur ve önümüzdeki dört haftanın takvimine ekler.',
+      inputSchema: { type: 'object', properties: { title: { type: 'string', minLength: 1, maxLength: 80 }, weekday: { type: 'number', minimum: 0, maximum: 6, description: 'Pazar 0, pazartesi 1, ... cumartesi 6' }, time: { type: 'string', description: 'SS:DD' }, duration: { type: 'number', minimum: 5, maximum: 300 }, exercises: { type: 'string', maxLength: 800, description: 'Her satırda bir hareket' } }, required: ['title', 'weekday', 'duration'], additionalProperties: false },
+      annotations: { readOnlyHint: false, untrustedContentHint: false },
+      execute(input) {
+        const weekday = Number(input?.weekday); const duration = Number(input?.duration);
+        if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6) throw new Error('Haftanın günü 0 ile 6 arasında olmalı');
+        if (!Number.isFinite(duration) || duration < 5 || duration > 300) throw new Error('Süre 5 ile 300 dakika arasında olmalı');
+        const template = { id: id(), title: requireText(input?.title, 'Antrenman adı').slice(0, 80), weekday, time: optionalTime(input?.time), duration, exercises: typeof input?.exercises === 'string' ? input.exercises.trim().slice(0, 800) : '', skippedDates: [] };
+        state.workoutTemplates.push(template); syncWorkoutTemplates(); save(); render();
+        return { id: template.id, status: 'created', title: template.title, weekday: template.weekday, generatedWeeks: 4 };
+      }
+    });
+
+    register({
       name: 'set_workout_exercise_status',
       title: 'Spor hareketini işaretle',
       description: 'Bir antrenmandaki hareketi tamamlandı veya açık olarak işaretler; tüm hareketler bitince antrenmanı tamamlar.',
@@ -942,6 +985,25 @@
         workout.done = exercises.length > 0 && exercises.every(x => x.done);
         save(); render();
         return { workoutId: workout.id, exerciseId: exercise.id, done: exercise.done, workoutCompleted: workout.done };
+      }
+    });
+
+    register({
+      name: 'update_monthly_finance',
+      title: 'Aylık finansı güncelle',
+      description: 'Bankadaki birikimi, aylık maaşı, bu ayın toplam ekstresini ve isteğe bağlı birikim hedefini günceller.',
+      inputSchema: { type: 'object', properties: { bankSavings: { type: 'number' }, monthlySalary: { type: 'number', minimum: 0 }, statement: { type: 'number', minimum: 0 }, savingsTarget: { type: 'number', minimum: 0 } }, required: ['bankSavings', 'monthlySalary', 'statement'], additionalProperties: false },
+      annotations: { readOnlyHint: false, untrustedContentHint: false },
+      execute(input) {
+        const bankSavings = Number(input?.bankSavings); const monthlySalary = Number(input?.monthlySalary); const statement = Number(input?.statement);
+        if (![bankSavings, monthlySalary, statement].every(Number.isFinite) || monthlySalary < 0 || statement < 0) throw new Error('Finans tutarları geçersiz');
+        state.settings.bankSavings = bankSavings;
+        state.settings.monthlySalary = monthlySalary;
+        state.settings.monthlyStatements = { ...(state.settings.monthlyStatements || {}), [currentMonthKey()]: statement };
+        if (input?.savingsTarget != null) { const target = Number(input.savingsTarget); if (!Number.isFinite(target) || target < 0) throw new Error('Birikim hedefi geçersiz'); state.settings.savingsTarget = target; }
+        save(); render();
+        const recurringExpenses = state.recurringExpenses.filter(item => item.type !== 'statement' && !item.includedInStatement).reduce((sum, item) => sum + Number(item.amount), 0);
+        return { status: 'updated', bankSavings, monthlySalary, recurringExpenses, statement, monthRemainder: monthlySalary - recurringExpenses - statement };
       }
     });
 
@@ -979,15 +1041,15 @@
     register({
       name: 'record_sleep',
       title: 'Uyku kaydet',
-      description: 'Yatış, kalkış, enerji ve kalite bilgileriyle bir uyku kaydı oluşturur.',
-      inputSchema: { type: 'object', properties: { date: { type: 'string', description: 'Uyanılan gün, YYYY-AA-GG' }, bedTime: { type: 'string', description: 'SS:DD' }, wakeTime: { type: 'string', description: 'SS:DD' }, energy: { type: 'number', minimum: 1, maximum: 5 }, quality: { type: 'number', minimum: 1, maximum: 5 } }, required: ['date', 'bedTime', 'wakeTime', 'energy', 'quality'], additionalProperties: false },
+      description: 'Toplam süre, enerji ve kalite bilgileriyle bir uyku kaydı oluşturur.',
+      inputSchema: { type: 'object', properties: { date: { type: 'string', description: 'Uyku kaydının günü, YYYY-AA-GG' }, durationMinutes: { type: 'number', minimum: 1, maximum: 1440 }, energy: { type: 'number', minimum: 1, maximum: 5 }, quality: { type: 'number', minimum: 1, maximum: 5 } }, required: ['date', 'durationMinutes', 'energy', 'quality'], additionalProperties: false },
       annotations: { readOnlyHint: false, untrustedContentHint: false },
       execute(input) {
-        const bedTime = optionalTime(input?.bedTime); const wakeTime = optionalTime(input?.wakeTime);
-        if (!bedTime || !wakeTime) throw new Error('Yatış ve kalkış saati gerekli');
+        const duration = Number(input?.durationMinutes);
+        if (!Number.isFinite(duration) || duration < 1 || duration > 1440) throw new Error('Uyku süresi 1 ile 1440 dakika arasında olmalı');
         const energy = Number(input?.energy); const quality = Number(input?.quality);
         if (![energy, quality].every(x => Number.isFinite(x) && x >= 1 && x <= 5)) throw new Error('Enerji ve kalite 1 ile 5 arasında olmalı');
-        const sleep = { id: id(), date: requireDate(input?.date), bedTime, wakeTime, energy, quality, duration: sleepDuration(bedTime, wakeTime) };
+        const sleep = { id: id(), date: requireDate(input?.date), energy, quality, duration };
         state.sleepEntries = state.sleepEntries.filter(x => x.date !== sleep.date); state.sleepEntries.push(sleep); save(); render();
         return { id: sleep.id, status: 'created', date: sleep.date, durationMinutes: sleep.duration };
       }
@@ -1001,6 +1063,7 @@
       const date = button.dataset.date;
       if (button.dataset.add === 'task') openTaskForm(null, date);
       if (button.dataset.add === 'workout') openWorkoutForm(null, date);
+      if (button.dataset.add === 'workout-template') openWorkoutTemplateForm();
       if (button.dataset.add === 'expense') openExpenseForm(null, date);
       if (button.dataset.add === 'income') openIncomeForm(null, date);
       if (button.dataset.add === 'recurring-expense') openRecurringExpenseForm();
@@ -1014,6 +1077,7 @@
     if (button.dataset.workoutDetail) { const item = state.workouts.find(x => x.id === button.dataset.workoutDetail); if (item) openWorkoutDetail(item); }
     if (button.dataset.editTask) openTaskForm(state.tasks.find(x => x.id === button.dataset.editTask));
     if (button.dataset.editWorkout) openWorkoutForm(state.workouts.find(x => x.id === button.dataset.editWorkout));
+    if (button.dataset.editWorkoutTemplate) openWorkoutTemplateForm(state.workoutTemplates.find(x => x.id === button.dataset.editWorkoutTemplate));
     if (button.dataset.editExpense) openExpenseForm(state.expenses.find(x => x.id === button.dataset.editExpense));
     if (button.dataset.editIncome) openIncomeForm(state.incomes.find(x => x.id === button.dataset.editIncome));
     if (button.dataset.editRecurringExpense) openRecurringExpenseForm(state.recurringExpenses.find(x => x.id === button.dataset.editRecurringExpense));
@@ -1026,8 +1090,6 @@
     if (button.dataset.month) { calendarCursor.setMonth(calendarCursor.getMonth() + Number(button.dataset.month)); selectedCalendarDate = toISO(calendarCursor); renderCalendar(); }
     if (button.dataset.calendarDate) { selectedCalendarDate = button.dataset.calendarDate; renderCalendar(); }
     if (button.dataset.planTab) { planTab = button.dataset.planTab; renderPlans(); }
-    if (button.hasAttribute('data-open-routine')) openRoutine();
-    if (button.hasAttribute('data-settings-sleep')) openSleepSettings();
     if (button.hasAttribute('data-settings-budget')) openBudgetSettings();
     if (button.hasAttribute('data-open-evaluation')) openEvaluation();
     if (button.hasAttribute('data-open-week-review')) openWeekReview();

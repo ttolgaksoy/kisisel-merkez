@@ -6,12 +6,12 @@ Tek kişi için hazırlanmış, iPhone ana ekranına kurulabilen kişisel planla
 
 - Günlük öncelikler ve görevler
 - Aylık takvim
-- Detaylı spor programı, hareket listesi ve tek tek tamamlama takibi
-- Manuel uyku kaydı, süre ve enerji ortalaması
+- Her hafta otomatik tekrarlanan spor programı, hareket listesi ve tek tek tamamlama takibi
+- Toplam süre, enerji ve kaliteyle sade manuel uyku kaydı
 - Gelir, ekstra para ve yatırım getirisi kayıtları
-- Aylık gelir-gider panosu, artış/azalış karşılaştırması ve birikim hedefi
-- Aylık bütçe, harcama kategorileri ve plansız gider takibi
-- Kira, fatura, abonelik ve kredi kartı ekstresi için aylık düzenli gider takibi
+- Ay sonunda kalacak tutar ve tahmini toplam birikim özeti
+- Banka birikimi, maaş, düzenli gider ve aylık toplam ekstreyle sade bütçe takibi
+- Fatura ve abonelikler için düzenli gider; kredi kartı için ayrı aylık toplam ekstre takibi
 - Tekrarlayan görevler, hızlı not kutusu ve 3 dakikalık haftalık planlama
 - Yaklaşan ödemeler, ay sonu bütçe tahmini ve sayısal hedefler
 - Aylık yedek hatırlatması ve isteğe bağlı PIN kilidi
