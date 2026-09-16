@@ -1,0 +1,13 @@
+{
+  "name": "Kişisel Merkez",
+  "short_name": "Merkez",
+  "description": "Görev, spor, uyku ve bütçe planlarını tek yerde tut.",
+  "lang": "tr-TR",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#080d14",
+  "theme_color": "#0b1018",
+  "icons": [
+    { "src": "./icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
