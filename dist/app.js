@@ -845,14 +845,15 @@
         const tasks = Array.isArray(imported.tasks) ? imported.tasks : [];
         const goals = Array.isArray(imported.goals) ? imported.goals : [];
         const notes = Array.isArray(imported.inboxNotes) ? imported.inboxNotes : [];
+        const replaceExisting = imported.mode === 'replace';
         const salary = Number(settings.monthlySalary || 0);
         const savings = Number(settings.bankSavings || 0);
         const statement = Number(settings.monthlyStatements?.[currentMonthKey()] || 0);
         openSheet('ChatGPT veri paketi', 'Eklenecek bilgileri kontrol et', `<div class="stack">
           <article class="card"><p class="item-title">Finans özeti</p><p class="item-detail">Birikim ${money(savings)} · Maaş ${money(salary)} · Bu ayki ekstre ${money(statement)}</p></article>
           <div class="mini-grid"><div class="stat-card"><div class="stat-label">Spor döngüsü</div><div class="stat-value">${templates.length}</div><div class="stat-note">haftalık program</div></div><div class="stat-card"><div class="stat-label">Düzenli gider</div><div class="stat-value">${recurring.length}</div><div class="stat-note">takip kalemi</div></div><div class="stat-card"><div class="stat-label">Takvim</div><div class="stat-value">${tasks.length}</div><div class="stat-note">görev</div></div><div class="stat-card"><div class="stat-label">Hedef ve not</div><div class="stat-value">${goals.length + notes.length}</div><div class="stat-note">kayıt</div></div></div>
-          <p class="sheet-copy">Aynı isimli kayıtlar ikinci kez eklenmez. Mevcut kayıtların korunur; finans rakamları paketteki güncel değerlerle güncellenir.</p>
-          <button class="button primary block" type="button" data-apply-chat-import>Verileri ekle</button>
+          <p class="sheet-copy">${replaceExisting ? '<strong>Temiz kurulum:</strong> Mevcut görev, spor, bütçe hareketi, uyku, hedef ve not kayıtları silinecek. Tema, PIN ve bildirim ayarların korunacak.' : 'Aynı isimli kayıtlar ikinci kez eklenmez. Mevcut kayıtların korunur; finans rakamları paketteki güncel değerlerle güncellenir.'}</p>
+          <button class="button ${replaceExisting ? 'danger' : 'primary'} block" type="button" data-apply-chat-import>${replaceExisting ? 'Sıfırla ve verileri yükle' : 'Verileri ekle'}</button>
         </div>`, root => {
           $('[data-apply-chat-import]', root).addEventListener('click', () => applyChatImport(imported));
         });
@@ -862,6 +863,29 @@
   }
 
   function applyChatImport(imported) {
+    if (imported.mode === 'replace') {
+      const previousProfile = { ...state.profile };
+      const previousSettings = state.settings || {};
+      const clean = defaultState();
+      clean.profile = previousProfile;
+      clean.settings.theme = previousSettings.theme || clean.settings.theme;
+      clean.settings.notifications = Boolean(previousSettings.notifications);
+      clean.settings.lastBackupAt = previousSettings.lastBackupAt || '';
+      clean.settings.pinHash = previousSettings.pinHash || '';
+      clean.tasks = [];
+      clean.workouts = [];
+      clean.workoutTemplates = [];
+      clean.expenses = [];
+      clean.incomes = [];
+      clean.recurringExpenses = [];
+      clean.recurringTasks = [];
+      clean.inboxNotes = [];
+      clean.goals = [];
+      clean.sleepEntries = [];
+      clean.weeklyReviews = [];
+      clean.notified = {};
+      state = clean;
+    }
     const settings = imported.settings || {};
     if (Number.isFinite(Number(settings.bankSavings))) state.settings.bankSavings = Number(settings.bankSavings);
     if (Number.isFinite(Number(settings.monthlySalary))) state.settings.monthlySalary = Number(settings.monthlySalary);
@@ -887,7 +911,7 @@
       if (text && !state.inboxNotes.some(current => uniqueKey(current.text) === uniqueKey(text))) state.inboxNotes.push({ id: id(), text: String(text).trim().slice(0, 300), createdAt: new Date().toISOString() });
     });
     state.workouts = state.workouts.filter(workout => workout.done || !['Üst vücut','Alt vücut'].includes(workout.title));
-    syncWorkoutTemplates(); save(); closeSheet(); render(); showToast('Sohbet verileri eklendi');
+    syncWorkoutTemplates(); save(); closeSheet(); render(); showToast(imported.mode === 'replace' ? 'Temiz kurulum tamamlandı' : 'Sohbet verileri eklendi');
   }
 
   function checkReminders() {
