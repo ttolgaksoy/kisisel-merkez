@@ -12,6 +12,7 @@ Tek kişi için hazırlanmış, iPhone ana ekranına kurulabilen kişisel planla
 - Ay sonunda kalacak tutar ve tahmini toplam birikim özeti
 - Banka birikimi, maaş, düzenli gider ve aylık toplam ekstreyle sade bütçe takibi
 - Fatura ve abonelikler için düzenli gider; kredi kartı için ayrı aylık toplam ekstre takibi
+- ChatGPT sohbetlerinden hazırlanan özel veri paketini mevcut kayıtlara ekleme
 - Tekrarlayan görevler, hızlı not kutusu ve 3 dakikalık haftalık planlama
 - Yaklaşan ödemeler, ay sonu bütçe tahmini ve sayısal hedefler
 - Aylık yedek hatırlatması ve isteğe bağlı PIN kilidi

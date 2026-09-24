@@ -1,4 +1,4 @@
-const CACHE = 'kisisel-merkez-v11';
+const CACHE = 'kisisel-merkez-v12';
 const ASSETS = ['./', './index.html', './styles.css', './app.js', './manifest.webmanifest', './icons/icon.svg', './icons/apple-touch-icon.svg'];
 
 self.addEventListener('install', event => {

@@ -464,7 +464,7 @@
       </div>
       <article class="card forecast-card"><div class="row between"><div><p class="item-title">Tahmini toplam birikim</p><p class="item-detail">Banka birikimi + maaş − düzenli giderler − ekstre</p></div><strong class="${projectedSavings >= 0 ? 'money-positive' : 'money-negative'}">${money(projectedSavings)}</strong></div></article>
       <div class="row between"><div><div class="section-label">Aylık düzenli giderler</div><p class="item-detail">Abonelikler, faturalar ve her ay tekrarlayan ödemeler</p></div><button class="button" type="button" data-add="recurring-expense">+ Ekle</button></div>
-      ${recurring.length ? `<article class="card recurring-summary"><div class="row between"><div><p class="item-title">Takip edilen ${money(recurringTrackedTotal)}</p><p class="item-detail">${money(recurringTotal)} ekstre dışında · ${money(recurringInStatement)} ekstre içinde</p></div><strong>%${recurringTrackedTotal ? Math.round(recurringPaidAll / recurringTrackedTotal * 100) : 0}</strong></div><div class="progress-track good"><span style="width:${recurringTrackedTotal ? recurringPaidAll / recurringTrackedTotal * 100 : 0}%"></span></div></article><div class="recurring-list">${recurring.map(item => { const paid = (item.paidMonths || []).includes(monthKey); const legacyStatement = item.type === 'statement'; return `<article class="card"><div class="row"><div class="module-icon">↻</div><div class="grow"><p class="item-title">${esc(item.title)}</p><p class="item-detail">${recurringTypeLabel(item.type)} · ${esc(item.category)}${legacyStatement ? ' · Hesaba dahil değil' : ` · ${item.includedInStatement ? 'Ekstre içinde' : 'Ekstre dışında'} · <span class="${!paid && new Date().getDate() > Number(item.dueDay) ? 'money-negative' : ''}">${recurringDueLabel(item, paid)}</span>`}</p></div><strong>${money(item.amount)}</strong><button class="icon-button" type="button" data-edit-recurring-expense="${item.id}" aria-label="${esc(item.title)} giderini düzenle">···</button></div>${legacyStatement ? '<p class="item-detail">Yeni toplam ekstre alanına taşıyıp bu kaydı silebilirsin.</p>' : `<button class="button block ${paid ? '' : 'primary'}" type="button" data-toggle-recurring-paid="${item.id}">${paid ? 'Ödemeyi geri al' : 'Ödendi olarak işaretle'}</button>`}</article>`; }).join('')}</div>` : `<article class="card empty-state"><div class="empty-icon">↻</div><h3>Düzenli gider eklenmemiş</h3><p>Abonelik, fatura veya her ay tekrarlayan bir ödemeyi ekle.</p><button class="button" type="button" data-add="recurring-expense">Düzenli gider ekle</button></article>`}
+      ${recurring.length ? `<article class="card recurring-summary"><div class="row between"><div><p class="item-title">Takip edilen ${money(recurringTrackedTotal)}</p><p class="item-detail">${money(recurringTotal)} ekstre dışında · ${money(recurringInStatement)} ekstre içinde</p></div><strong>%${recurringTrackedTotal ? Math.round(recurringPaidAll / recurringTrackedTotal * 100) : 0}</strong></div><div class="progress-track good"><span style="width:${recurringTrackedTotal ? recurringPaidAll / recurringTrackedTotal * 100 : 0}%"></span></div></article><div class="recurring-list">${recurring.map(item => { const paid = (item.paidMonths || []).includes(monthKey); const legacyStatement = item.type === 'statement'; return `<article class="card"><div class="row"><div class="module-icon">↻</div><div class="grow"><p class="item-title">${esc(item.title)}</p><p class="item-detail">${recurringTypeLabel(item.type)} · ${esc(item.category)}${legacyStatement ? ' · Hesaba dahil değil' : ` · ${item.includedInStatement ? 'Ekstre içinde' : 'Ekstre dışında'} · <span class="${!paid && new Date().getDate() > Number(item.dueDay) ? 'money-negative' : ''}">${recurringDueLabel(item, paid)}</span>${item.needsReview ? ' · Ödeme gününü kontrol et' : ''}`}</p></div><strong>${money(item.amount)}</strong><button class="icon-button" type="button" data-edit-recurring-expense="${item.id}" aria-label="${esc(item.title)} giderini düzenle">···</button></div>${legacyStatement ? '<p class="item-detail">Yeni toplam ekstre alanına taşıyıp bu kaydı silebilirsin.</p>' : `<button class="button block ${paid ? '' : 'primary'}" type="button" data-toggle-recurring-paid="${item.id}">${paid ? 'Ödemeyi geri al' : 'Ödendi olarak işaretle'}</button>`}</article>`; }).join('')}</div>` : `<article class="card empty-state"><div class="empty-icon">↻</div><h3>Düzenli gider eklenmemiş</h3><p>Abonelik, fatura veya her ay tekrarlayan bir ödemeyi ekle.</p><button class="button" type="button" data-add="recurring-expense">Düzenli gider ekle</button></article>`}
       <div class="row between"><div><div class="section-label">İsteğe bağlı ayrıntılar</div><p class="item-detail">Ek gelir ve tekil harcamalar; ana maaş/ekstre hesabından ayrı tutulur</p></div><div class="row"><button class="button" type="button" data-add="income">+ Ek gelir</button><button class="button" type="button" data-add="expense">+ Harcama</button></div></div>
       ${items.length ? items.map(item => item.transactionType === 'income' ? `<article class="card"><div class="row"><div class="module-icon">＋</div><div class="grow"><p class="item-title">${esc(item.note || item.source)}</p><p class="item-detail">${shortDate(item.date)} · ${esc(item.source)} · ${incomeKindLabel(item.kind)}</p></div><strong class="money-positive">+${money(item.amount)}</strong><button class="icon-button" type="button" data-edit-income="${item.id}">···</button></div></article>` : `<article class="card"><div class="row"><div class="module-icon">₺</div><div class="grow"><p class="item-title">${esc(item.note || item.category)}</p><p class="item-detail">${shortDate(item.date)} · ${esc(item.category)}${item.planned ? ' · Planlı' : ' · Plansız'}</p></div><strong>−${money(item.amount)}</strong><button class="icon-button" type="button" data-edit-expense="${item.id}">···</button></div></article>`).join('') : `<article class="card empty-state"><div class="empty-icon">₺</div><h3>Ayrıntılı hareket yok</h3><p>Bu alan isteğe bağlıdır; maaş, düzenli gider ve ekstre için kullanman gerekmez.</p></article>`}`;
   }
@@ -680,7 +680,7 @@
       <label class="field">Son ödeme günü<input name="dueDay" type="number" min="1" max="31" required value="${item.dueDay}"></label>
       <label class="checkbox-field"><input name="includedInStatement" type="checkbox" ${item.includedInStatement ? 'checked' : ''}> Bu ödeme kredi kartı ekstresinin içinde</label>
       <p class="sheet-copy">İşaretlersen ödeme takip edilir fakat toplam ekstrede zaten bulunduğu için bütçeden ikinci kez düşülmez.</p>${formActions(Boolean(existing))}</form>`, root => {
-      $('#recurring-expense-form', root).addEventListener('submit', event => { event.preventDefault(); const data = new FormData(event.currentTarget); const next = { id: existing?.id || id(), title: data.get('title').trim(), amount: Number(data.get('amount')), type: data.get('type'), category: data.get('category'), dueDay: Number(data.get('dueDay')), includedInStatement: data.get('includedInStatement') === 'on', paidMonths: existing?.paidMonths || [] }; if (existing) { Object.assign(existing, next); const payment = state.expenses.find(x => x.recurringExpenseId === existing.id && x.recurringMonth === currentMonthKey()); if (payment) { payment.amount = next.amount; payment.category = next.category; payment.note = next.title; } } else state.recurringExpenses.push(next); save(); closeSheet(); render(); showToast('Düzenli gider kaydedildi'); });
+      $('#recurring-expense-form', root).addEventListener('submit', event => { event.preventDefault(); const data = new FormData(event.currentTarget); const next = { id: existing?.id || id(), title: data.get('title').trim(), amount: Number(data.get('amount')), type: data.get('type'), category: data.get('category'), dueDay: Number(data.get('dueDay')), includedInStatement: data.get('includedInStatement') === 'on', paidMonths: existing?.paidMonths || [] }; if (existing) { delete existing.needsReview; Object.assign(existing, next); const payment = state.expenses.find(x => x.recurringExpenseId === existing.id && x.recurringMonth === currentMonthKey()); if (payment) { payment.amount = next.amount; payment.category = next.category; payment.note = next.title; } } else state.recurringExpenses.push(next); save(); closeSheet(); render(); showToast('Düzenli gider kaydedildi'); });
       $('[data-delete-item]', root)?.addEventListener('click', () => { state.recurringExpenses = state.recurringExpenses.filter(x => x.id !== existing.id); save(); closeSheet(); render(); showToast('Düzenli gider silindi'); });
     });
   }
@@ -761,6 +761,7 @@
       <form class="settings-block form" id="profile-form"><label class="field">Adın<input name="name" maxlength="40" required value="${esc(state.profile.name)}"></label><label class="field">Görünüm<select name="theme"><option value="auto" ${state.settings.theme === 'auto' ? 'selected' : ''}>Telefon ayarını kullan</option><option value="light" ${state.settings.theme === 'light' ? 'selected' : ''}>Açık</option><option value="dark" ${state.settings.theme === 'dark' ? 'selected' : ''}>Koyu</option></select></label><button class="button primary" type="submit">Ayarları kaydet</button></form>
       <div class="settings-block"><h3>Hatırlatmalar</h3><p>Görev ve spor saatlerinde bu cihazda bildirim gösterebilir. İlk sürümde kontrol uygulama açıkken yapılır.</p><button class="button" type="button" data-enable-notifications>${state.settings.notifications ? 'Bildirimler açık' : 'Bildirimleri aç'}</button></div>
       <div class="settings-block"><h3>Uygulama kilidi</h3><p>Bütçe ve planlarını meraklı gözlerden korumak için 4–6 haneli bir PIN kullan.</p><div class="settings-actions"><button class="button" type="button" data-pin-settings>${state.settings.pinHash ? 'PIN’i değiştir' : 'PIN belirle'}</button>${state.settings.pinHash ? '<button class="button" type="button" data-lock-now>Şimdi kilitle</button>' : ''}</div></div>
+      <div class="settings-block"><h3>ChatGPT’den veri ekle</h3><p>Sohbetlerinden hazırlanan veri paketini mevcut kayıtlarını silmeden birleştir.</p><button class="button primary" type="button" data-import-chat>Sohbet verisini ekle</button></div>
       <div class="settings-block"><h3>Yedekleme</h3><p>Kayıtların bu cihazda saklanır. ${state.settings.lastBackupAt ? `Son yedek: ${shortDate(state.settings.lastBackupAt.slice(0,10))}.` : 'Henüz yedek alınmadı.'}</p><div class="settings-actions"><button class="button" type="button" data-export>Yedeği indir</button><button class="button" type="button" data-import>Yedekten yükle</button></div></div>
       <div class="settings-block"><h3>iPhone’a kur</h3><p>Siteyi Safari’de aç. Paylaş simgesine dokunup “Ana Ekrana Ekle”yi seç.</p></div>
     </div>`, root => {
@@ -770,6 +771,7 @@
       $('[data-lock-now]', root)?.addEventListener('click', () => { closeSheet(); showPinLock(); });
       $('[data-export]', root).addEventListener('click', exportBackup);
       $('[data-import]', root).addEventListener('click', () => $('#backup-file').click());
+      $('[data-import-chat]', root).addEventListener('click', () => $('#chat-import-file').click());
     });
   }
 
@@ -829,6 +831,63 @@
       } catch (error) { showToast('Bu dosya geçerli bir Kişisel Merkez yedeği değil'); }
     };
     reader.readAsText(file);
+  }
+
+  function importChatData(file) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const imported = JSON.parse(reader.result);
+        if (!imported || imported.kind !== 'kisisel-merkez-chat-import' || imported.version !== 1) throw new Error('Geçersiz paket');
+        const settings = imported.settings || {};
+        const templates = Array.isArray(imported.workoutTemplates) ? imported.workoutTemplates : [];
+        const recurring = Array.isArray(imported.recurringExpenses) ? imported.recurringExpenses : [];
+        const tasks = Array.isArray(imported.tasks) ? imported.tasks : [];
+        const goals = Array.isArray(imported.goals) ? imported.goals : [];
+        const notes = Array.isArray(imported.inboxNotes) ? imported.inboxNotes : [];
+        const salary = Number(settings.monthlySalary || 0);
+        const savings = Number(settings.bankSavings || 0);
+        const statement = Number(settings.monthlyStatements?.[currentMonthKey()] || 0);
+        openSheet('ChatGPT veri paketi', 'Eklenecek bilgileri kontrol et', `<div class="stack">
+          <article class="card"><p class="item-title">Finans özeti</p><p class="item-detail">Birikim ${money(savings)} · Maaş ${money(salary)} · Bu ayki ekstre ${money(statement)}</p></article>
+          <div class="mini-grid"><div class="stat-card"><div class="stat-label">Spor döngüsü</div><div class="stat-value">${templates.length}</div><div class="stat-note">haftalık program</div></div><div class="stat-card"><div class="stat-label">Düzenli gider</div><div class="stat-value">${recurring.length}</div><div class="stat-note">takip kalemi</div></div><div class="stat-card"><div class="stat-label">Takvim</div><div class="stat-value">${tasks.length}</div><div class="stat-note">görev</div></div><div class="stat-card"><div class="stat-label">Hedef ve not</div><div class="stat-value">${goals.length + notes.length}</div><div class="stat-note">kayıt</div></div></div>
+          <p class="sheet-copy">Aynı isimli kayıtlar ikinci kez eklenmez. Mevcut kayıtların korunur; finans rakamları paketteki güncel değerlerle güncellenir.</p>
+          <button class="button primary block" type="button" data-apply-chat-import>Verileri ekle</button>
+        </div>`, root => {
+          $('[data-apply-chat-import]', root).addEventListener('click', () => applyChatImport(imported));
+        });
+      } catch (error) { showToast('Bu dosya geçerli bir sohbet veri paketi değil'); }
+    };
+    reader.readAsText(file);
+  }
+
+  function applyChatImport(imported) {
+    const settings = imported.settings || {};
+    if (Number.isFinite(Number(settings.bankSavings))) state.settings.bankSavings = Number(settings.bankSavings);
+    if (Number.isFinite(Number(settings.monthlySalary))) state.settings.monthlySalary = Number(settings.monthlySalary);
+    if (Number.isFinite(Number(settings.savingsTarget))) state.settings.savingsTarget = Number(settings.savingsTarget);
+    if (settings.monthlyStatements && typeof settings.monthlyStatements === 'object') state.settings.monthlyStatements = { ...(state.settings.monthlyStatements || {}), ...settings.monthlyStatements };
+    const uniqueKey = value => String(value || '').trim().toLocaleLowerCase('tr-TR');
+    (Array.isArray(imported.workoutTemplates) ? imported.workoutTemplates : []).forEach(item => {
+      const exists = state.workoutTemplates.some(current => uniqueKey(current.title) === uniqueKey(item.title) && Number(current.weekday) === Number(item.weekday));
+      if (!exists) state.workoutTemplates.push({ id: id(), title: String(item.title || '').trim(), weekday: clamp(Number(item.weekday) || 0, 0, 6), time: String(item.time || ''), duration: clamp(Number(item.duration) || 45, 5, 300), exercises: String(item.exercises || '').trim(), skippedDates: [] });
+    });
+    (Array.isArray(imported.recurringExpenses) ? imported.recurringExpenses : []).forEach(item => {
+      if (!state.recurringExpenses.some(current => uniqueKey(current.title) === uniqueKey(item.title))) state.recurringExpenses.push({ id: id(), title: String(item.title || '').trim(), amount: Math.max(0, Number(item.amount) || 0), type: ['fixed','bill'].includes(item.type) ? item.type : 'fixed', category: String(item.category || 'Diğer'), dueDay: clamp(Number(item.dueDay) || 1, 1, 31), includedInStatement: Boolean(item.includedInStatement), paidMonths: [], needsReview: Boolean(item.needsReview) });
+    });
+    (Array.isArray(imported.tasks) ? imported.tasks : []).forEach(item => {
+      const exists = state.tasks.some(current => uniqueKey(current.title) === uniqueKey(item.title) && current.date === item.date);
+      if (!exists && /^\d{4}-\d{2}-\d{2}$/.test(item.date || '')) state.tasks.push({ id: id(), title: String(item.title || '').trim(), date: item.date, time: String(item.time || ''), priority: Boolean(item.priority), done: false, notes: String(item.notes || 'Sohbetten aktarıldı') });
+    });
+    (Array.isArray(imported.goals) ? imported.goals : []).forEach(item => {
+      if (!state.goals.some(current => uniqueKey(current.title) === uniqueKey(item.title))) state.goals.push({ id: id(), title: String(item.title || '').trim(), current: Number(item.current) || 0, target: Math.max(0.01, Number(item.target) || 1), unit: String(item.unit || '') });
+    });
+    (Array.isArray(imported.inboxNotes) ? imported.inboxNotes : []).forEach(item => {
+      const text = typeof item === 'string' ? item : item.text;
+      if (text && !state.inboxNotes.some(current => uniqueKey(current.text) === uniqueKey(text))) state.inboxNotes.push({ id: id(), text: String(text).trim().slice(0, 300), createdAt: new Date().toISOString() });
+    });
+    state.workouts = state.workouts.filter(workout => workout.done || !['Üst vücut','Alt vücut'].includes(workout.title));
+    syncWorkoutTemplates(); save(); closeSheet(); render(); showToast('Sohbet verileri eklendi');
   }
 
   function checkReminders() {
@@ -1110,6 +1169,7 @@
   document.addEventListener('click', event => { if (!quickMenu.hidden && !quickMenu.contains(event.target) && !fab.contains(event.target)) { quickMenu.hidden = true; fab.setAttribute('aria-expanded', 'false'); } });
 
   $('#backup-file').addEventListener('change', event => { const file = event.target.files[0]; if (file) importBackup(file); event.target.value = ''; });
+  $('#chat-import-file').addEventListener('change', event => { const file = event.target.files[0]; if (file) importChatData(file); event.target.value = ''; });
 
   if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(error => console.warn('Service worker kaydedilemedi', error)));
   applyTheme();
